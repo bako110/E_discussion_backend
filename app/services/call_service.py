@@ -131,6 +131,13 @@ async def start(db: AsyncSession, me: User, body: CallStartIn) -> CallStartOut:
     if await user_service.is_blocked_between(db, me.id, body.callee_id):
         raise ForbiddenError("calls.blocked", code="call_blocked")
 
+    # Le destinataire refuse les appels d'inconnus et je ne suis pas un de ses
+    # contacts -> on rejette AVANT de faire sonner (plus fiable que le client).
+    if callee.call_block_unknown and not await user_service.are_contacts(
+        db, body.callee_id, me.id
+    ):
+        raise ForbiddenError("calls.blocked", code="call_blocked")
+
     # 1) L'appelant a-t-il deja un appel en cours ? -> il ne peut pas en lancer
     #    un 2e (409). Couvre aussi le cas d'un appel zombie cote appelant.
     mine_live = (

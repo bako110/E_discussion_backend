@@ -33,6 +33,15 @@ class UserMe(UserPublic):
     profile_photo_privacy: str = "everyone"
     about_privacy: str = "everyone"
     read_receipts: bool = True
+    # preferences d'appel (synchronisees entre appareils)
+    call_ringtone: str = "default"
+    call_vibrate: bool = True
+    call_answer_on_speaker: bool = False
+    call_low_data: bool = False
+    call_block_unknown: bool = False
+
+
+_RINGTONE = r"^(default|classic|soft)$"
 
 
 class UserUpdate(BaseModel):
@@ -45,6 +54,11 @@ class UserUpdate(BaseModel):
     profile_photo_privacy: str | None = Field(None, pattern=_PRIVACY)
     about_privacy: str | None = Field(None, pattern=_PRIVACY)
     read_receipts: bool | None = None
+    call_ringtone: str | None = Field(None, pattern=_RINGTONE)
+    call_vibrate: bool | None = None
+    call_answer_on_speaker: bool | None = None
+    call_low_data: bool | None = None
+    call_block_unknown: bool | None = None
 
 
 class ContactSyncIn(BaseModel):

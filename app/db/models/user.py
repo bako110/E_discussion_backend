@@ -51,6 +51,17 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # accuses de lecture : si False, on n'envoie ni ne recoit les "vu"
     read_receipts: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    # ── Preferences d'appel (synchronisees entre appareils) ─────────────
+    # 'default' | 'classic' | 'soft'
+    call_ringtone: Mapped[str] = mapped_column(String(16), default="default", nullable=False)
+    call_vibrate: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # decrocher directement en haut-parleur
+    call_answer_on_speaker: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # mode donnees reduites : la video demarre coupee
+    call_low_data: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # refuser cote SERVEUR les appels de personnes hors de mes contacts
+    call_block_unknown: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     def __repr__(self) -> str:  # pragma: no cover
         who = self.username or self.email or self.phone
         return f"<User {who} ({self.id})>"
