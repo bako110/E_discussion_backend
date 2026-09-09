@@ -1,10 +1,11 @@
-"""Upload de medias (images, videos, audio, avatars) sur disque local.
+"""Upload de medias (images, videos, audio, documents, avatars) sur disque local.
 
 Ecrit sous `<MEDIA_ROOT>/<yyyy>/<mm>/<uuid>.<ext>`, servi en statique sous
 `<MEDIA_URL_PREFIX>`. Traitement :
   - image : re-encodage + redimensionnement (cote max IMAGE_MAX_DIM) + miniature ;
   - video : copie brute + miniature via ffmpeg (1re frame) si dispo ;
-  - audio : copie brute, duree lue via ffprobe si dispo.
+  - audio : copie brute, duree lue via ffprobe si dispo ;
+  - file  : copie brute (PDF, docs, archives…), aucun traitement.
 
 Aucune dependance dure a ffmpeg : si le binaire est absent, on saute la
 miniature video / la duree, sans echouer.
@@ -29,6 +30,35 @@ from app.core.errors import AppError
 _IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"}
 _VIDEO_EXT = {".mp4", ".mov", ".m4v", ".webm", ".3gp", ".mkv"}
 _AUDIO_EXT = {".m4a", ".mp3", ".aac", ".ogg", ".opus", ".wav", ".amr"}
+# documents joints a une conversation (aucun traitement, copie brute)
+_FILE_EXT = {
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".rtf",
+    ".csv", ".odt", ".ods", ".odp", ".zip", ".rar", ".7z", ".gz", ".tar",
+    ".epub",
+}
+_FILE_CONTENT_TYPES = {
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.oasis.opendocument.text",
+    "application/vnd.oasis.opendocument.spreadsheet",
+    "application/vnd.oasis.opendocument.presentation",
+    "application/rtf",
+    "application/zip",
+    "application/x-zip-compressed",
+    "application/x-7z-compressed",
+    "application/x-rar-compressed",
+    "application/gzip",
+    "application/x-tar",
+    "application/epub+zip",
+    "text/plain",
+    "text/csv",
+    "text/rtf",
+}
 
 _CONTENT_TYPE_EXT = {
     "image/jpeg": ".jpg",
@@ -102,6 +132,8 @@ def _categorize(ext: str, content_type: str | None) -> str:
         return "video"
     if ext in _AUDIO_EXT:
         return "audio"
+    if ext in _FILE_EXT:
+        return "file"
     ct = (content_type or "").lower()
     if ct.startswith("image/"):
         return "image"
@@ -109,6 +141,8 @@ def _categorize(ext: str, content_type: str | None) -> str:
         return "video"
     if ct.startswith("audio/"):
         return "audio"
+    if ct in _FILE_CONTENT_TYPES:
+        return "file"
     raise AppError("media.unsupported_type", status_code=415, code="unsupported_media")
 
 
@@ -225,7 +259,7 @@ async def save_upload(file: UploadFile) -> MediaResult:
         ext = _CONTENT_TYPE_EXT.get((file.content_type or "").lower(), "")
     category = _categorize(ext, file.content_type)
     if not ext:
-        ext = {"image": ".jpg", "video": ".mp4", "audio": ".m4a"}[category]
+        ext = {"image": ".jpg", "video": ".mp4", "audio": ".m4a", "file": ".bin"}[category]
 
     now = datetime.now(UTC)
     out_dir = _root() / f"{now:%Y}" / f"{now:%m}"
@@ -258,11 +292,18 @@ async def save_upload(file: UploadFile) -> MediaResult:
                 size=size,
             )
 
-        # audio
+        if category == "audio":
+            return MediaResult(
+                url=_public_url(f"{rel_dir}/{stem}{ext}"),
+                media_type="audio",
+                duration_sec=_probe_duration(tmp_path),
+                size=size,
+            )
+
+        # file : document brut, aucun traitement
         return MediaResult(
             url=_public_url(f"{rel_dir}/{stem}{ext}"),
-            media_type="audio",
-            duration_sec=_probe_duration(tmp_path),
+            media_type="file",
             size=size,
         )
 

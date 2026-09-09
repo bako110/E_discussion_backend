@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 class MediaOut(BaseModel):
     url: str
-    media_type: str  # 'image' | 'video' | 'audio'
+    media_type: str  # 'image' | 'video' | 'audio' | 'file'
     thumbnail_url: str | None = None
     width: int | None = None
     height: int | None = None

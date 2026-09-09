@@ -11,7 +11,7 @@ Types d'events pousses (champ `type`) :
   - message.reaction   reaction ajoutee/retiree
   - receipt.delivered  / receipt.read
   - typing.start / typing.stop
-  - presence.update    { user_id, online }
+  - presence.update    { user_id, online, last_seen_at? }
   - conversation.request  nouvelle demande de conversation
 """
 from __future__ import annotations
@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import json
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from fastapi import WebSocket
 
@@ -75,9 +76,11 @@ class WsManager:
     async def publish_presence(self, user_id: str, *, online: bool) -> None:
         # notifie l'utilisateur lui-meme (multi-device) — les partenaires
         # recoivent la presence via le fetch de conversations / un event dedie
-        await self.send_to_user(
-            user_id, {"type": "presence.update", "user_id": user_id, "online": online}
-        )
+        payload: dict = {"type": "presence.update", "user_id": user_id, "online": online}
+        if not online:
+            # horodatage de deconnexion : permet l'affichage « vu à … » cote pair
+            payload["last_seen_at"] = datetime.now(tz=timezone.utc).isoformat()
+        await self.send_to_user(user_id, payload)
 
     # ── pub/sub Redis ──────────────────────────────────────────────────
     async def _ensure_subscribed(self, user_id: str) -> None:

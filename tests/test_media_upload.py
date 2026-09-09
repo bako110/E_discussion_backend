@@ -131,12 +131,37 @@ async def test_upload_rejects_unsupported_type(client, _capture_otp):
     token = await _token(client, _capture_otp)
     h = {"Authorization": f"Bearer {token}"}
 
+    # un exécutable n'est ni un média ni un document autorisé
     r = await client.post(
+        "/api/v1/media/upload",
+        headers=h,
+        files={"file": ("payload.exe", b"MZ\x90\x00", "application/x-msdownload")},
+    )
+    assert r.status_code == 415, r.text
+
+
+async def test_upload_accepts_document(client, _capture_otp):
+    token = await _token(client, _capture_otp)
+    h = {"Authorization": f"Bearer {token}"}
+
+    r = await client.post(
+        "/api/v1/media/upload",
+        headers=h,
+        files={"file": ("rapport.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["media_type"] == "file"
+    assert body["url"].endswith(".pdf")
+
+    # une note texte est un document valide (envoi de fichier dans une conversation)
+    r2 = await client.post(
         "/api/v1/media/upload",
         headers=h,
         files={"file": ("notes.txt", b"hello world", "text/plain")},
     )
-    assert r.status_code == 415, r.text
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["media_type"] == "file"
 
 
 async def test_upload_requires_auth(client):

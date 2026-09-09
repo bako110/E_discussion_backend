@@ -236,13 +236,16 @@ async def mark_delivered(db: AsyncSession, user_id: uuid.UUID, message_id: uuid.
         return
     db.add(MessageReceipt(message_id=message_id, user_id=user_id, state=ReceiptState.delivered))
     await db.flush()
-    # notifie l'expediteur : double coche grise (message.new -> "remis")
+    # notifie l'expediteur : double coche grise (message.new -> "remis").
+    # On relaie AUSSI `client_id` : cote client la ligne locale peut encore
+    # etre indexee par client_id si la confirmation du POST n'est pas passee.
     await manager.send_to_user(
         str(msg.sender_id),
         {
             "type": "receipt.delivered",
             "conversation_id": str(msg.conversation_id),
             "message_id": str(message_id),
+            "client_id": msg.client_id,
         },
     )
 
