@@ -13,7 +13,7 @@ from app.db.models.conversation import (
     ConversationRequest,
     RequestStatus,
 )
-from app.db.models.message import Message, MessageReceipt, ReceiptState
+from app.db.models.message import Message, MessageReceipt, MessageType, ReceiptState
 from app.db.models.user import User
 from app.schemas.conversation import ConversationDetail, ConversationSummary
 from app.services import user_service
@@ -235,3 +235,66 @@ async def detail(db: AsyncSession, me: User, conversation_id: uuid.UUID) -> Conv
         muted=await is_muted(db, me.id, conv.id),
         request_status=await request_status(db, me.id, pid),
     )
+
+
+async def clear_history(db: AsyncSession, me: User, conversation_id: uuid.UUID) -> int:
+    """« Effacer la discussion » — supprime tous les messages de la
+    conversation (et leurs reçus/réactions par cascade). 1-to-1 : c'est
+    définitif pour les deux ; on prévient le partenaire.
+    """
+    conv = await get_owned(db, me, conversation_id)
+    rows = (
+        await db.execute(select(Message.id).where(Message.conversation_id == conv.id))
+    ).scalars().all()
+    n = len(rows)
+    if n:
+        await db.execute(
+            Message.__table__.delete().where(Message.conversation_id == conv.id)
+        )
+        conv.last_message_at = None
+    await db.flush()
+    pid = await _partner_of(conv, me.id)
+    await manager.send_to_user(
+        str(pid),
+        {"type": "conversation.cleared", "conversation_id": str(conv.id), "by": str(me.id)},
+    )
+    return n
+
+
+async def list_media(
+    db: AsyncSession, me: User, conversation_id: uuid.UUID, *, offset: int, limit: int
+) -> list[dict]:
+    """Médias partagés dans la conversation (images / vidéos / fichiers /
+    audio), du plus récent au plus ancien."""
+    conv = await get_owned(db, me, conversation_id)
+    media_types = (
+        MessageType.image,
+        MessageType.video,
+        MessageType.file,
+        MessageType.voice,
+    )
+    rows = (
+        await db.execute(
+            select(Message)
+            .where(
+                Message.conversation_id == conv.id,
+                Message.type.in_(media_types),
+                Message.attachment_url.is_not(None),
+                Message.deleted_at.is_(None),
+            )
+            .order_by(desc(Message.created_at))
+            .offset(offset)
+            .limit(limit)
+        )
+    ).scalars().all()
+    return [
+        {
+            "message_id": str(m.id),
+            "type": m.type.value,
+            "url": m.attachment_url,
+            "meta": m.attachment_meta,
+            "sender_id": str(m.sender_id),
+            "created_at": m.created_at,
+        }
+        for m in rows
+    ]

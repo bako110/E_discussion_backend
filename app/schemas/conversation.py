@@ -87,3 +87,12 @@ class ConversationDetail(BaseModel):
     partner: UserPublic
     muted: bool
     request_status: str
+
+
+class SharedMediaOut(BaseModel):
+    message_id: uuid.UUID
+    type: str
+    url: str
+    meta: dict | None = None
+    sender_id: uuid.UUID
+    created_at: datetime

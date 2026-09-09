@@ -13,6 +13,7 @@ from app.schemas.conversation import (
     ConversationSummary,
     MessageCreate,
     MessageOut,
+    SharedMediaOut,
     StartConversationIn,
 )
 from app.services import conversation_service, message_service
@@ -97,3 +98,26 @@ async def post_message(
 async def mark_read(conversation_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
     n = await message_service.mark_read(db, current_user, conversation_id)
     return Message(message=f"{n} marked read")
+
+
+@router.delete("/{conversation_id}", response_model=Message)
+async def clear_conversation(
+    conversation_id: uuid.UUID, current_user: CurrentUser, db: DbSession
+):
+    """Efface tout l'historique de la conversation (définitif, 1-to-1)."""
+    n = await conversation_service.clear_history(db, current_user, conversation_id)
+    await db.commit()
+    return Message(message=f"{n} messages cleared")
+
+
+@router.get("/{conversation_id}/media", response_model=list[SharedMediaOut])
+async def shared_media(
+    conversation_id: uuid.UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    page: PageParams,
+):
+    """Médias partagés dans la conversation (images / vidéos / fichiers / audio)."""
+    return await conversation_service.list_media(
+        db, current_user, conversation_id, offset=page.offset, limit=page.limit
+    )
