@@ -81,7 +81,9 @@ async def _issue_tokens(
 
 
 # ── register ───────────────────────────────────────────────────────────────
-async def register(db: AsyncSession, data: RegisterIn, *, locale: str) -> tuple[User, str]:
+async def register(
+    db: AsyncSession, data: RegisterIn, *, locale: str
+) -> tuple[User, str, str | None]:
     email = data.email.lower() if data.email else None
     phone = to_e164(data.phone) if data.phone else None
 
@@ -107,14 +109,14 @@ async def register(db: AsyncSession, data: RegisterIn, *, locale: str) -> tuple[
     db.add(user)
     await db.flush()
 
-    channel = await otp_service.request_otp(
+    sent = await otp_service.request_otp(
         db,
         identifier=email or phone,  # type: ignore[arg-type]
         purpose="register",
         locale=user.locale,
         user_id=str(user.id),
     )
-    return user, channel
+    return user, sent.channel, sent.dev_code
 
 
 async def verify_registration(
@@ -174,10 +176,12 @@ async def login_with_otp(
 
 
 # ── Auth par telephone, sans mot de passe (flux principal du mobile) ───────
-async def phone_start(db: AsyncSession, *, phone: str, locale: str) -> str:
+async def phone_start(
+    db: AsyncSession, *, phone: str, locale: str
+) -> tuple[str, str | None]:
     """Normalise le numero, cree le compte s'il n'existe pas encore, envoie
-    le code SMS. Retourne le numero E.164 normalise (a re-afficher dans le
-    modal de confirmation cote mobile)."""
+    le code SMS. Retourne `(e164, dev_code)` — `dev_code` non nul uniquement
+    en mode test (settings.otp_dev_echo)."""
     e164 = to_e164(phone)
     if not e164:
         raise ConflictError("errors.validation", status_code=422, code="invalid_phone")
@@ -191,10 +195,10 @@ async def phone_start(db: AsyncSession, *, phone: str, locale: str) -> str:
     elif not user.is_active:
         raise UnauthorizedError("auth.account_disabled", code="account_disabled")
 
-    await otp_service.request_otp(
+    sent = await otp_service.request_otp(
         db, identifier=e164, purpose="login", locale=user.locale, user_id=str(user.id)
     )
-    return e164
+    return e164, sent.dev_code
 
 
 async def phone_verify(

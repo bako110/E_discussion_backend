@@ -12,6 +12,7 @@ from __future__ import annotations
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import NamedTuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +26,13 @@ from app.services.notifier import send_email, send_sms
 from app.utils.phone import looks_like_phone
 
 _SEND_COOLDOWN_SEC = 30
+
+
+class OtpSent(NamedTuple):
+    channel: str
+    # DEV UNIQUEMENT : le code en clair, renseigne seulement si
+    # settings.otp_dev_echo est actif (jamais en production).
+    dev_code: str | None
 
 
 def _gen_code() -> str:
@@ -44,9 +52,10 @@ async def request_otp(
     purpose: str,
     locale: str,
     user_id: str | None = None,
-) -> str:
+) -> OtpSent:
     """Genere un code, l'envoie par le bon canal, le stocke (Redis + audit).
-    Retourne le canal utilise ('sms' | 'email')."""
+    Retourne `OtpSent(channel, dev_code)` — `dev_code` non nul seulement si
+    `settings.otp_dev_echo` (mode test, hors production)."""
     r = get_redis()
     key = f"otp:{purpose}:{identifier}"
     cooldown_key = f"{key}:cooldown"
@@ -83,7 +92,7 @@ async def request_otp(
         )
     )
     await db.flush()
-    return channel.value
+    return OtpSent(channel=channel.value, dev_code=code if settings.otp_dev_echo else None)
 
 
 async def verify_otp(*, identifier: str, purpose: str, code: str, locale: str) -> None:

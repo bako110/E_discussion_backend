@@ -33,8 +33,8 @@ async def phone_start(body: PhoneStartIn, db: DbSession, locale: Locale):
     """Etape 1 : le client a saisi pays + numero et confirme dans un modal.
     On normalise en E.164, on cree le compte si besoin, et on envoie le code
     par SMS (affiche dans les logs si Twilio n'est pas configure)."""
-    e164 = await auth_service.phone_start(db, phone=body.phone, locale=locale)
-    return PhoneStartOut(phone=e164, sent=True, resend_in=30)
+    e164, dev_code = await auth_service.phone_start(db, phone=body.phone, locale=locale)
+    return PhoneStartOut(phone=e164, sent=True, resend_in=30, dev_code=dev_code)
 
 
 @router.post("/phone/verify", response_model=AuthResult)
@@ -63,11 +63,12 @@ async def register(
     db: DbSession,
     locale: Locale,
 ):
-    user, channel = await auth_service.register(db, body, locale=locale)
+    user, channel, dev_code = await auth_service.register(db, body, locale=locale)
     return RegisterOut(
         user_id=user.id,
         verification_channel=channel,
         message="verification code sent",
+        dev_code=dev_code,
     )
 
 
@@ -105,7 +106,9 @@ async def send_otp(body: SendOtpIn, db: DbSession, locale: Locale):
     lookup = to_e164(ident) if looks_like_phone(ident) else ident.lower()
     if not lookup:
         return Message(message="invalid identifier")
-    await otp_service.request_otp(db, identifier=lookup, purpose=body.purpose, locale=locale)
+    sent = await otp_service.request_otp(db, identifier=lookup, purpose=body.purpose, locale=locale)
+    if sent.dev_code:
+        return Message(message=f"OTP sent (dev code: {sent.dev_code})")
     return Message(message="OTP sent")
 
 

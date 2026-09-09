@@ -31,6 +31,9 @@ class RegisterOut(BaseModel):
     user_id: uuid.UUID
     verification_channel: str  # "email" | "sms"
     message: str
+    # DEV UNIQUEMENT (settings.otp_dev_echo) : le code OTP en clair, pour
+    # tester sans SMS. Toujours null en production.
+    dev_code: str | None = None
 
 
 # ── Connexion ──────────────────────────────────────────────────────────────
@@ -56,6 +59,8 @@ class PhoneStartOut(BaseModel):
     phone: str          # E.164 normalise, a re-afficher dans le modal de confirmation
     sent: bool = True
     resend_in: int = 30  # secondes avant de pouvoir renvoyer un code
+    # DEV UNIQUEMENT (settings.otp_dev_echo) : le code OTP en clair. Null en prod.
+    dev_code: str | None = None
 
 
 class PhoneVerifyIn(BaseModel):
