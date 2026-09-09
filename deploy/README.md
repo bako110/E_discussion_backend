@@ -25,11 +25,32 @@ les deux `location` (voir `/opt/backend-stack/nginx-config/nginx.conf`).
 ssh root@VPS
 git clone https://github.com/bako110/E_discussion_backend.git /opt/e-discussion
 cd /opt/e-discussion/deploy
-cp .env.prod.example .env            # remplir POSTGRES_PASSWORD / JWT_SECRET
-cp livekit.yaml.example livekit.yaml # remplir keys + IP publique
+
+cp .env.prod.example .env            # remplir POSTGRES_PASSWORD / JWT_SECRET / LIVEKIT_API_*
+cp livekit.yaml.example livekit.yaml # remplir keys (mêmes valeurs) + IP publique
+chmod 600 .env livekit.yaml
+
 docker compose -f docker-compose.prod.yml up -d --build
 docker network connect edisc_net stream_nginx
-# + ajouter les 2 location dans nginx.conf, puis: docker compose -f ... restart nginx (backend-stack)
+
+# Reverse-proxy : coller le contenu de deploy/nginx-edisc.conf dans le
+# server{ 443; server_name gofolyx.com } de
+#   /opt/backend-stack/nginx-config/nginx.conf   (juste avant `location / {`)
+# puis REDÉMARRER le conteneur (bind-mount par inode -> reload ne suffit pas) :
+cd /opt/backend-stack && docker compose -f docker-compose.prod.yml restart nginx
+
+# Sauvegarde BDD quotidienne :
+#   /opt/webhook/backup-edisc.sh   +   cron  17 3 * * *
+```
+
+Contrôles :
+```sh
+curl https://gofolyx.com/edisc/health                 # {"status":"ok",...}
+curl https://gofolyx.com/edisc-sfu/                    # OK
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
+  -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  https://gofolyx.com/edisc/api/v1/ws                  # 101
 ```
 
 ## Déploiement continu — webhook dédié
@@ -43,6 +64,15 @@ changé) + contrôle santé. **N'affecte aucun autre projet du VPS.**
 - Logs : `/var/log/edisc-deploy.log`
 - Hook enregistré dans `/opt/webhook/hooks.json` (id `deploy-edisc`, filtre
   `ref == refs/heads/main`)
+- Côté GitHub : Settings → Webhooks → URL `https://gofolyx.com/hooks/deploy-edisc`,
+  content-type `application/json`, secret = contenu de `/root/.edisc-webhook-secret`,
+  event *push* uniquement.
+
+## Sauvegarde BDD
+
+`/opt/webhook/backup-edisc.sh` → `pg_dump | gzip` dans `/root/backups/edisc/`,
+rotation 14 jours. Cron `17 3 * * *`. Logs `/var/log/edisc-backup.log`.
+Restauration : `gunzip -c edisc_AAAAMMJJ_HHMMSS.sql.gz | docker exec -i edisc_db psql -U ediscussion ediscussion`.
 
 ## Appels (LiveKit self-hosted, PAS LiveKit Cloud)
 
