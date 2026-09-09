@@ -294,6 +294,109 @@ async def set_muted(db: AsyncSession, me: User, group_id: uuid.UUID, muted: bool
     await db.flush()
 
 
+# ── administration (owner / admin) ────────────────────────────────────────
+async def _require_admin(
+    db: AsyncSession, group_id: uuid.UUID, user_id: uuid.UUID
+) -> tuple[Group, GroupMember]:
+    group, mem = await _require_member(db, group_id, user_id)
+    if mem.role not in _ADMIN_ROLES:
+        raise ForbiddenError("group.not_admin", code="not_admin")
+    return group, mem
+
+
+async def add_members(
+    db: AsyncSession, me: User, group_id: uuid.UUID, user_ids: list[uuid.UUID]
+) -> list[GroupMemberOut]:
+    group, _ = await _require_admin(db, group_id, me.id)
+    base_role = (
+        GroupRole.subscriber if group.kind == GroupKind.channel else GroupRole.member
+    )
+    added: list[uuid.UUID] = []
+    for uid in user_ids:
+        if await _membership(db, group_id, uid) is not None:
+            continue
+        target = await db.get(User, uid)
+        if target is None or not target.is_active:
+            continue
+        db.add(GroupMember(group_id=group_id, user_id=uid, role=base_role))
+        added.append(uid)
+    if added:
+        await db.flush()
+        await _broadcast(
+            db, group_id, {"type": "group.member", "group_id": str(group_id), "action": "add"}
+        )
+    return await members(db, me, group_id)
+
+
+async def set_member_role(
+    db: AsyncSession, me: User, group_id: uuid.UUID, target_id: uuid.UUID, role: GroupRole
+) -> None:
+    group, my_mem = await _require_admin(db, group_id, me.id)
+    if target_id == me.id:
+        raise ForbiddenError("group.cannot_change_self", code="cannot_change_self")
+    target = await _membership(db, group_id, target_id)
+    if target is None:
+        raise NotFoundError("group.member_not_found", code="member_not_found")
+    if target.role == GroupRole.owner:
+        raise ForbiddenError("group.cannot_change_owner", code="cannot_change_owner")
+    # seul l'owner peut nommer/retirer un admin
+    if role in _ADMIN_ROLES and my_mem.role != GroupRole.owner:
+        raise ForbiddenError("group.owner_only", code="owner_only")
+    # role plancher selon le type
+    if group.kind == GroupKind.channel and role == GroupRole.member:
+        role = GroupRole.subscriber
+    if group.kind == GroupKind.group and role == GroupRole.subscriber:
+        role = GroupRole.member
+    target.role = role
+    await db.flush()
+    await _broadcast(
+        db, group_id, {"type": "group.member", "group_id": str(group_id), "action": "role"}
+    )
+
+
+async def remove_member(
+    db: AsyncSession, me: User, group_id: uuid.UUID, target_id: uuid.UUID
+) -> None:
+    group, my_mem = await _require_admin(db, group_id, me.id)
+    if target_id == me.id:
+        raise ForbiddenError("group.use_leave", code="use_leave")
+    target = await _membership(db, group_id, target_id)
+    if target is None:
+        raise NotFoundError("group.member_not_found", code="member_not_found")
+    if target.role == GroupRole.owner:
+        raise ForbiddenError("group.cannot_remove_owner", code="cannot_remove_owner")
+    if target.role in _ADMIN_ROLES and my_mem.role != GroupRole.owner:
+        raise ForbiddenError("group.owner_only", code="owner_only")
+    await db.delete(target)
+    await db.flush()
+    await _broadcast(
+        db,
+        group_id,
+        {"type": "group.member", "group_id": str(group_id), "user_id": str(target_id), "action": "remove"},
+    )
+
+
+async def delete_group(db: AsyncSession, me: User, group_id: uuid.UUID) -> None:
+    group, mem = await _require_member(db, group_id, me.id)
+    if mem.role != GroupRole.owner:
+        raise ForbiddenError("group.owner_only", code="owner_only")
+    await _broadcast(
+        db, group_id, {"type": "group.deleted", "group_id": str(group_id)}
+    )
+    await db.delete(group)  # cascade -> membres + messages
+    await db.flush()
+
+
+async def reset_invite_code(db: AsyncSession, me: User, group_id: uuid.UUID) -> GroupOut:
+    from app.db.models.group import _gen_invite_code
+
+    group, _ = await _require_admin(db, group_id, me.id)
+    group.invite_code = _gen_invite_code()
+    await db.flush()
+    await _broadcast(db, group_id, {"type": "group.updated", "group_id": str(group_id)})
+    return await _serialize_group(db, group, me_id=me.id)
+
+
 # ── messages ───────────────────────────────────────────────────────────────
 async def send_message(
     db: AsyncSession, me: User, group_id: uuid.UUID, data: GroupMessageCreate

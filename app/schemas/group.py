@@ -28,6 +28,14 @@ class GroupUpdate(BaseModel):
     is_public: bool | None = None
 
 
+class AddMembersIn(BaseModel):
+    user_ids: list[uuid.UUID] = Field(..., min_length=1)
+
+
+class SetRoleIn(BaseModel):
+    role: GroupRole
+
+
 class GroupMemberOut(ORMModel):
     user: UserPublic
     role: GroupRole

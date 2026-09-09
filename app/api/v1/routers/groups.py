@@ -10,6 +10,7 @@ from app.api.deps import CurrentUser, DbSession, PageParams
 from app.db.models.group import GroupKind
 from app.schemas.common import Message
 from app.schemas.group import (
+    AddMembersIn,
     GroupCreate,
     GroupMemberOut,
     GroupMessageCreate,
@@ -18,6 +19,7 @@ from app.schemas.group import (
     GroupPreview,
     GroupUpdate,
     JoinIn,
+    SetRoleIn,
 )
 from app.services import group_service
 
@@ -63,9 +65,47 @@ async def edit(
     return await group_service.update_group(db, current_user, group_id, body)
 
 
+@router.delete("/{group_id}", response_model=Message)
+async def delete_group(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    await group_service.delete_group(db, current_user, group_id)
+    return Message(message="deleted")
+
+
+@router.post("/{group_id}/invite/reset", response_model=GroupOut)
+async def reset_invite(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    return await group_service.reset_invite_code(db, current_user, group_id)
+
+
 @router.get("/{group_id}/members", response_model=list[GroupMemberOut])
 async def get_members(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
     return await group_service.members(db, current_user, group_id)
+
+
+@router.post("/{group_id}/members", response_model=list[GroupMemberOut])
+async def add_members(
+    group_id: uuid.UUID, body: AddMembersIn, current_user: CurrentUser, db: DbSession
+):
+    return await group_service.add_members(db, current_user, group_id, body.user_ids)
+
+
+@router.put("/{group_id}/members/{user_id}/role", response_model=Message)
+async def set_member_role(
+    group_id: uuid.UUID,
+    user_id: uuid.UUID,
+    body: SetRoleIn,
+    current_user: CurrentUser,
+    db: DbSession,
+):
+    await group_service.set_member_role(db, current_user, group_id, user_id, body.role)
+    return Message(message="role updated")
+
+
+@router.delete("/{group_id}/members/{user_id}", response_model=Message)
+async def remove_member(
+    group_id: uuid.UUID, user_id: uuid.UUID, current_user: CurrentUser, db: DbSession
+):
+    await group_service.remove_member(db, current_user, group_id, user_id)
+    return Message(message="removed")
 
 
 @router.post("/{group_id}/leave", response_model=Message)
