@@ -13,3 +13,7 @@ firebase-service-account.json
 
 # Fichiers uploades (dev)
 media/
+
+# Secrets de déploiement générés sur le serveur
+deploy/.env
+deploy/livekit.yaml

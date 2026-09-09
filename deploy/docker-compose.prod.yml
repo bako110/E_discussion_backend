@@ -1,0 +1,101 @@
+# ─────────────────────────────────────────────────────────────────────────
+#  E-discussion backend — déploiement VPS (isolé, à côté des autres projets).
+#
+#  Services :
+#    edisc_db       PostgreSQL 16 (interne uniquement)
+#    edisc_redis    Redis 7 (interne uniquement — présence + pub/sub WS)
+#    edisc_api      FastAPI/uvicorn, exposé sur 127.0.0.1:8090 (nginx proxy)
+#    edisc_livekit  SFU LiveKit auto-hébergé (host network — média WebRTC)
+#
+#  Le reverse-proxy `stream_nginx` (projet backend-stack) est rattaché au
+#  réseau `edisc_net` pour router :
+#    https://msg.gofolyx.com  -> edisc_api:8000
+#    https://sfu.gofolyx.com  -> 127.0.0.1:7880 (LiveKit)
+#
+#  Démarrage :
+#    cd /opt/e-discussion/deploy
+#    docker compose -f docker-compose.prod.yml up -d --build
+#    docker network connect edisc_net stream_nginx   # une seule fois
+# ─────────────────────────────────────────────────────────────────────────
+name: e-discussion
+
+services:
+  edisc_db:
+    image: postgres:16-alpine
+    container_name: edisc_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ediscussion}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-ediscussion}
+    volumes:
+      - edisc_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ediscussion}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - edisc_net
+
+  edisc_redis:
+    image: redis:7-alpine
+    container_name: edisc_redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - edisc_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - edisc_net
+
+  edisc_api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: edisc_api
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ediscussion}:${POSTGRES_PASSWORD}@edisc_db:5432/${POSTGRES_DB:-ediscussion}
+      REDIS_URL: redis://edisc_redis:6379/0
+    # migrations Alembic puis démarrage uvicorn (prod : pas de --reload)
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'"
+    volumes:
+      - edisc_media:/app/media
+    ports:
+      - "127.0.0.1:8090:8000"
+    depends_on:
+      edisc_db:
+        condition: service_healthy
+      edisc_redis:
+        condition: service_healthy
+    networks:
+      - edisc_net
+
+  edisc_livekit:
+    image: livekit/livekit-server:v1.8
+    container_name: edisc_livekit
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    # host network : requis pour le média WebRTC (UDP 50000-50200)
+    network_mode: host
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+
+networks:
+  edisc_net:
+    name: edisc_net
+    driver: bridge
+
+volumes:
+  edisc_pgdata:
+  edisc_redisdata:
+  edisc_media:
