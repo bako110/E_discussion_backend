@@ -47,10 +47,13 @@ Contrôles :
 ```sh
 curl https://gofolyx.com/edisc/health                 # {"status":"ok",...}
 curl https://gofolyx.com/edisc-sfu/                    # OK
-curl -s -o /dev/null -w '%{http_code}\n' \
+curl -s --http1.1 -o /dev/null -w '%{http_code}\n' \
   -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
   -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
   https://gofolyx.com/edisc/api/v1/ws                  # 101
+# NB: --http1.1 obligatoire pour tester — WebSocket ne s'upgrade pas en HTTP/2
+# (nginx sert HTTP/2 par défaut). Le client RN `new WebSocket()` utilise
+# toujours HTTP/1.1, donc l'app se connecte sans souci.
 ```
 
 ## Déploiement continu — webhook dédié
