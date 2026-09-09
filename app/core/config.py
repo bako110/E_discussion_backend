@@ -50,9 +50,11 @@ class Settings(BaseSettings):
     OTP_LENGTH: int = 6
     OTP_TTL_SECONDS: int = 300
     OTP_MAX_ATTEMPTS: int = 5
-    # DEV UNIQUEMENT : renvoie le code OTP dans la reponse de l'API (pour
-    # tester sans SMS). REFUSE si ENV == production. A mettre a False des que
-    # l'envoi SMS reel est branche.
+    # MODE TEST : renvoie le code OTP dans la reponse de l'API (pour tester
+    # sans SMS). Actif tant que ce flag est True — Y COMPRIS EN PRODUCTION,
+    # car c'est actuellement le seul environnement. A REMETTRE A False des que
+    # l'envoi SMS reel (Twilio) est branche : sinon le code OTP transite en
+    # clair dans chaque reponse HTTP.
     OTP_DEV_ECHO: bool = False
 
     # ── Twilio ─────────────────────────────────────────────────────────────
@@ -122,8 +124,10 @@ class Settings(BaseSettings):
 
     @property
     def otp_dev_echo(self) -> bool:
-        """Echo du code OTP autorise seulement hors production."""
-        return self.OTP_DEV_ECHO and self.ENV != "production"
+        """Echo du code OTP : pilote uniquement par le flag (aucun garde-fou
+        d'environnement, la prod etant le seul env de test actuel). A
+        DESACTIVER des que l'envoi SMS reel est en place."""
+        return self.OTP_DEV_ECHO
 
     @property
     def sync_database_url(self) -> str:
