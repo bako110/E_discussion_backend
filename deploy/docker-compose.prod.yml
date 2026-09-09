@@ -8,9 +8,10 @@
 #    edisc_livekit  SFU LiveKit auto-hébergé (host network — média WebRTC)
 #
 #  Le reverse-proxy `stream_nginx` (projet backend-stack) est rattaché au
-#  réseau `edisc_net` pour router :
-#    https://msg.gofolyx.com  -> edisc_api:8000
-#    https://sfu.gofolyx.com  -> 127.0.0.1:7880 (LiveKit)
+#  réseau `edisc_net` et route en SOUS-CHEMIN de gofolyx.com (pas de
+#  sous-domaine DNS dédié — le DNS Hostinger n'a pas de wildcard) :
+#    https://gofolyx.com/edisc/       -> edisc_api:8000        (API + WS + médias)
+#    https://gofolyx.com/edisc-sfu/   -> 172.17.0.1:7880       (LiveKit SFU)
 #
 #  Démarrage :
 #    cd /opt/e-discussion/deploy
@@ -87,6 +88,11 @@ services:
     command: --config /etc/livekit.yaml
     # host network : requis pour le média WebRTC (UDP 50000-50200)
     network_mode: host
+    environment:
+      # IP publique du VPS annoncée aux clients (sinon LiveKit annonce les
+      # IP des bridges docker et l'ICE échoue). Doit matcher rtc.ips dans
+      # livekit.yaml.
+      NODE_IP: "${VPS_PUBLIC_IP:-178.238.230.82}"
     volumes:
       - ./livekit.yaml:/etc/livekit.yaml:ro
 

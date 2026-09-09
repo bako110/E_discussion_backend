@@ -1,6 +1,7 @@
 # SFU LiveKit auto-hébergé — E-discussion (PAS LiveKit Cloud).
 # Le script de déploiement copie ce fichier en livekit.yaml en remplaçant
-# PLACEHOLDER_KEY / PLACEHOLDER_SECRET par une paire générée.
+# PLACEHOLDER_KEY / PLACEHOLDER_SECRET par une paire générée, et
+# 203.0.113.10 par l'IP publique du VPS.
 #
 # Mono-nœud, sans Redis (suffisant pour des appels 1-to-1). Tourne en
 # network_mode: host sur le VPS.
@@ -12,8 +13,16 @@ rtc:
   udp_port: 50000-50200
   # repli WebRTC-over-TCP quand l'UDP du client est bloqué
   tcp_port: 7881
-  # IP publique : auto-détection via STUN au démarrage
-  use_external_ip: true
+  # IP annoncée aux clients : forcée via NODE_IP dans le compose
+  use_external_ip: false
+  # host network : ne garder que l'interface publique (eth0),
+  # sinon LiveKit annonce aussi les IP des bridges docker -> ICE cassé.
+  interfaces:
+    includes:
+      - eth0
+  ips:
+    includes:
+      - 203.0.113.10/32
 
 keys:
   PLACEHOLDER_KEY: PLACEHOLDER_SECRET
@@ -23,7 +32,7 @@ keys:
 webhook:
   api_key: PLACEHOLDER_KEY
   urls:
-    - https://msg.gofolyx.com/api/v1/calls/webhooks/livekit
+    - https://gofolyx.com/edisc/api/v1/calls/webhooks/livekit
 
 room:
   auto_create: true
