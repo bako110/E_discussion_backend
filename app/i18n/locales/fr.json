@@ -55,6 +55,7 @@
     "blocked": "Impossible d'appeler ce contact.",
     "already_in_call": "Un appel est déjà en cours avec ce contact.",
     "not_ringing": "Cet appel ne sonne plus.",
-    "still_active": "Cet appel est encore en cours."
+    "still_active": "Cet appel est encore en cours.",
+    "callee_busy": "Ce contact est déjà en communication."
   }
 }

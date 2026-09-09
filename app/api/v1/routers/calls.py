@@ -60,8 +60,13 @@ async def accept_call(call_id: uuid.UUID, current_user: CurrentUser, db: DbSessi
 
 
 @router.post("/{call_id}/reject", response_model=CallOut)
-async def reject_call(call_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
-    out = await call_service.reject(db, current_user, call_id)
+async def reject_call(
+    call_id: uuid.UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    reason: str | None = None,
+):
+    out = await call_service.reject(db, current_user, call_id, reason=reason)
     await db.commit()
     return out
 
@@ -92,6 +97,15 @@ async def clear_calls(current_user: CurrentUser, db: DbSession):
     n = await call_service.clear_history(db, current_user)
     await db.commit()
     return Message(message=f"{n} entries cleared")
+
+
+@router.post("/clear-stuck", response_model=Message)
+async def clear_stuck_calls(current_user: CurrentUser, db: DbSession):
+    """Clôt de force tout appel encore « en cours » impliquant l'utilisateur
+    (récupération après crash / perte réseau — évite les 409 fantômes)."""
+    n = await call_service.clear_stuck(db, current_user)
+    await db.commit()
+    return Message(message=f"{n} calls cleared")
 
 
 # ── webhook LiveKit (non authentifie JWT app — signe par la cle API LiveKit) ─

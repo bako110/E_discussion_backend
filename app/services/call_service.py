@@ -131,23 +131,38 @@ async def start(db: AsyncSession, me: User, body: CallStartIn) -> CallStartOut:
     if await user_service.is_blocked_between(db, me.id, body.callee_id):
         raise ForbiddenError("calls.blocked", code="call_blocked")
 
-    # un appel deja actif entre les deux ? on le renvoie plutot que d'en creer un 2e
-    existing = (
+    # 1) L'appelant a-t-il deja un appel en cours ? -> il ne peut pas en lancer
+    #    un 2e (409). Couvre aussi le cas d'un appel zombie cote appelant.
+    mine_live = (
         await db.execute(
             select(CallLog)
             .where(
-                or_(
-                    (CallLog.caller_id == me.id) & (CallLog.callee_id == body.callee_id),
-                    (CallLog.caller_id == body.callee_id) & (CallLog.callee_id == me.id),
-                ),
+                or_(CallLog.caller_id == me.id, CallLog.callee_id == me.id),
                 CallLog.status.in_(_LIVE),
             )
             .order_by(CallLog.created_at.desc())
             .limit(1)
         )
     ).scalar_one_or_none()
-    if existing is not None:
+    if mine_live is not None:
+        # meme paire -> on considere que c'est un retry, on renvoie l'appel
+        if body.callee_id in (mine_live.caller_id, mine_live.callee_id):
+            raise AppError("calls.already_in_call", status_code=409, code="already_in_call")
         raise AppError("calls.already_in_call", status_code=409, code="already_in_call")
+
+    # 2) Le destinataire est-il deja en appel (avec qqn d'autre) ? -> occupe.
+    callee_live = (
+        await db.execute(
+            select(CallLog.id)
+            .where(
+                or_(CallLog.caller_id == body.callee_id, CallLog.callee_id == body.callee_id),
+                CallLog.status.in_(_LIVE),
+            )
+            .limit(1)
+        )
+    ).first()
+    if callee_live is not None:
+        raise AppError("calls.callee_busy", status_code=409, code="callee_busy")
 
     room_name = f"call_{uuid.uuid4().hex}"
     call = CallLog(
@@ -249,6 +264,7 @@ async def _finish(
     *,
     status: CallStatus,
     event: str,
+    reason: str | None = None,
 ) -> CallOut:
     call = await _load(db, call_id)
     if me.id not in (call.caller_id, call.callee_id):
@@ -272,24 +288,28 @@ async def _finish(
     await db.flush()
 
     other_id = call.callee_id if call.caller_id == me.id else call.caller_id
-    await manager.send_to_user(
-        str(other_id),
-        {
-            "type": event,
-            "call_id": str(call.id),
-            "status": call.status.value,
-            "duration_sec": call.duration_sec,
-        },
-    )
+    payload: dict = {
+        "type": event,
+        "call_id": str(call.id),
+        "status": call.status.value,
+        "duration_sec": call.duration_sec,
+    }
+    if reason:
+        payload["reason"] = reason
+    await manager.send_to_user(str(other_id), payload)
     return await _to_out(db, me, call)
 
 
-async def reject(db: AsyncSession, me: User, call_id: uuid.UUID) -> CallOut:
-    """Le destinataire refuse l'appel qui sonne."""
+async def reject(
+    db: AsyncSession, me: User, call_id: uuid.UUID, *, reason: str | None = None
+) -> CallOut:
+    """Le destinataire refuse l'appel qui sonne (reason='busy' si deja en ligne)."""
     call = await _load(db, call_id)
     if call.callee_id != me.id:
         raise ForbiddenError()
-    return await _finish(db, me, call_id, status=CallStatus.rejected, event="call.rejected")
+    return await _finish(
+        db, me, call_id, status=CallStatus.rejected, event="call.rejected", reason=reason
+    )
 
 
 async def cancel(db: AsyncSession, me: User, call_id: uuid.UUID) -> CallOut:
@@ -311,6 +331,45 @@ async def hangup(db: AsyncSession, me: User, call_id: uuid.UUID) -> CallOut:
             return await _finish(db, me, call_id, status=CallStatus.cancelled, event="call.cancelled")
         return await _finish(db, me, call_id, status=CallStatus.missed, event="call.ended")
     return await _finish(db, me, call_id, status=CallStatus.ended, event="call.ended")
+
+
+async def clear_stuck(db: AsyncSession, me: User) -> int:
+    """Clôt de force TOUS les appels encore 'live' impliquant l'utilisateur.
+
+    Filet de secours contre les appels zombies (client tué sans hangup,
+    perte réseau au raccroché). Appelé par le client au démarrage / avant de
+    relancer un appel s'il a reçu un 409.
+    """
+    rows = (
+        await db.execute(
+            select(CallLog).where(
+                or_(CallLog.caller_id == me.id, CallLog.callee_id == me.id),
+                CallLog.status.in_(_LIVE),
+            )
+        )
+    ).scalars().all()
+    n = 0
+    for call in rows:
+        _cancel_ring_timer(call.id)
+        call.status = CallStatus.ended if call.answered_at else CallStatus.cancelled
+        call.ended_at = _now()
+        if call.answered_at:
+            call.duration_sec = _elapsed(call.answered_at, call.ended_at)
+        else:
+            call.direction = CallDirection.missed
+        other_id = call.callee_id if call.caller_id == me.id else call.caller_id
+        await manager.send_to_user(
+            str(other_id),
+            {
+                "type": "call.ended",
+                "call_id": str(call.id),
+                "status": call.status.value,
+                "duration_sec": call.duration_sec,
+            },
+        )
+        n += 1
+    await db.flush()
+    return n
 
 
 # ── expiration de sonnerie (appelée par un worker/cron ou le client) ─────
