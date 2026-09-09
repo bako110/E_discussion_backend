@@ -145,9 +145,6 @@ async def start(db: AsyncSession, me: User, body: CallStartIn) -> CallStartOut:
         )
     ).scalar_one_or_none()
     if mine_live is not None:
-        # meme paire -> on considere que c'est un retry, on renvoie l'appel
-        if body.callee_id in (mine_live.caller_id, mine_live.callee_id):
-            raise AppError("calls.already_in_call", status_code=409, code="already_in_call")
         raise AppError("calls.already_in_call", status_code=409, code="already_in_call")
 
     # 2) Le destinataire est-il deja en appel (avec qqn d'autre) ? -> occupe.
