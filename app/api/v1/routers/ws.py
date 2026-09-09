@@ -9,11 +9,14 @@ presence.update, ...). Le client peut envoyer :
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid
+from datetime import datetime, timezone
 
 import jwt
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from sqlalchemy import update
 
 from app.core.security import decode_token
 from app.db.models.user import User
@@ -68,6 +71,16 @@ async def websocket_endpoint(ws: WebSocket) -> None:
         pass
     finally:
         await manager.disconnect(user_id, ws)
+        # Persiste la derniere connexion en base (la colonne n'etait jamais
+        # ecrite -> "vu a ..." toujours vide). Best-effort.
+        with contextlib.suppress(Exception):
+            async with AsyncSessionLocal() as db:
+                await db.execute(
+                    update(User)
+                    .where(User.id == uuid.UUID(user_id))
+                    .values(last_seen_at=datetime.now(tz=timezone.utc))
+                )
+                await db.commit()
 
 
 async def _handle_client_event(user_id: str, data: dict) -> None:
