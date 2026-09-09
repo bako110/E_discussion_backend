@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+*.sqlite3
+*.db
+.pytest_cache/
+.ruff_cache/
+firebase-service-account.json
+.DS_Store
+
+# Fichiers uploades (dev)
+media/

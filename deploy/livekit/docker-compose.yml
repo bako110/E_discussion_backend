@@ -1,0 +1,45 @@
+# ─────────────────────────────────────────────────────────────────────────
+#  Serveur LiveKit auto-hébergé (SFU) — PAS LiveKit Cloud.
+#  À déployer sur le VPS (IP publique). Le backend Gofolyx ne fait que
+#  signer les tokens JWT ; ce conteneur relaie l'audio/vidéo.
+#
+#  Prérequis VPS :
+#    - Docker + docker compose
+#    - Un domaine pointant sur le VPS : sfu.gofolyx.com (A record)
+#    - Ports ouverts dans le pare-feu :
+#        7880/tcp   (WebSocket signaling + API)
+#        7881/tcp   (WebRTC over TCP, fallback)
+#        50000-50100/udp  (WebRTC media — RTP)
+#        (optionnel) 443/tcp si vous mettez un reverse proxy TLS devant
+#
+#  Démarrage :
+#    cd deploy/livekit
+#    cp livekit.yaml.example livekit.yaml   # puis éditez les clés + domaine
+#    docker compose up -d
+#
+#  Générer une paire de clés API (à mettre dans livekit.yaml ET dans le
+#  .env du backend) :
+#    docker run --rm livekit/livekit-server generate-keys
+# ─────────────────────────────────────────────────────────────────────────
+services:
+  livekit:
+    image: livekit/livekit-server:v1.8
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    network_mode: host          # requis pour le média WebRTC (UDP)
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+
+  # Redis dédié au SFU (présence des rooms, coordination multi-nœuds).
+  # Séparé du Redis applicatif du backend.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    ports:
+      - "127.0.0.1:6389:6379"
+    volumes:
+      - livekit_redis:/data
+
+volumes:
+  livekit_redis:

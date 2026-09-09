@@ -1,0 +1,60 @@
+{
+  "errors": {
+    "generic": "Something went wrong.",
+    "not_found": "Resource not found.",
+    "unauthorized": "Authentication required.",
+    "forbidden": "Access denied.",
+    "conflict": "This content already exists.",
+    "rate_limited": "Too many attempts. Try again later.",
+    "validation": "Some data is invalid.",
+    "internal": "Internal server error."
+  },
+  "auth": {
+    "invalid_credentials": "Invalid identifier or password.",
+    "email_taken": "This email address is already in use.",
+    "phone_taken": "This phone number is already in use.",
+    "username_taken": "This username is already taken.",
+    "account_unverified": "Account not verified. Enter the code you received.",
+    "account_disabled": "This account is disabled.",
+    "token_expired": "Session expired, please sign in again.",
+    "refresh_invalid": "Invalid refresh token."
+  },
+  "otp": {
+    "sms_body": "E-discussion: your verification code is {code}. Valid for {ttl_min} minutes.",
+    "email_subject": "Your E-discussion verification code",
+    "email_body": "Hello,\n\nYour verification code is: {code}\nIt expires in {ttl_min} minutes.\n\nThe E-discussion team.",
+    "invalid": "Invalid verification code.",
+    "expired": "Verification code expired.",
+    "too_many_attempts": "Too many attempts. Request a new code."
+  },
+  "conversation": {
+    "not_found": "Conversation not found.",
+    "blocked": "You cannot send a message to this user.",
+    "request_pending": "Your conversation request is awaiting acceptance.",
+    "cannot_message_self": "You cannot message yourself."
+  },
+  "message": {
+    "not_found": "Message not found.",
+    "not_owner": "You can only edit your own messages.",
+    "edit_window_closed": "This message can no longer be edited."
+  },
+  "user": {
+    "not_found": "User not found.",
+    "cannot_block_self": "You cannot block yourself."
+  },
+  "media": {
+    "unsupported_type": "Unsupported file type.",
+    "empty_file": "Empty file.",
+    "too_large": "File too large (max {max_mb} MB)."
+  },
+  "calls": {
+    "disabled": "Calls are not available right now.",
+    "not_found": "Call not found.",
+    "callee_not_found": "This contact is unavailable.",
+    "cannot_call_self": "You can't call yourself.",
+    "blocked": "You can't call this contact.",
+    "already_in_call": "A call is already in progress with this contact.",
+    "not_ringing": "This call is no longer ringing.",
+    "still_active": "This call is still active."
+  }
+}

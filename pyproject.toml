@@ -1,0 +1,24 @@
+[project]
+name = "ediscussion-backend"
+version = "0.1.0"
+description = "E-discussion — messagerie 1-to-1 chiffree (FastAPI + PostgreSQL + Redis)"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
+# E501: gere par le formatter ; B008: Depends() en default = idiome FastAPI ;
+# UP042: on garde le mixin `str` sur les Enum (serialisation JSON / valeurs SQL
+# stables), StrEnum a une semantique de formatage differente.
+ignore = ["E501", "B008", "UP042"]
+
+[tool.ruff.lint.per-file-ignores]
+"alembic/*" = ["F401"]
+"app/db/models/__init__.py" = ["F401"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

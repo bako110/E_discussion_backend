@@ -1,0 +1,42 @@
+# ── E-discussion backend ── FastAPI + PostgreSQL + Redis ──────────────────────
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+python-dotenv==1.0.1
+
+# ── DB ───────────────────────────────────────────────────────────────────────
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+psycopg2-binary==2.9.10   # driver sync pour Alembic
+alembic==1.14.0
+
+# ── Cache / presence / pub-sub temps reel ────────────────────────────────────
+redis==5.2.1
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+pyjwt==2.10.1
+python-multipart==0.0.20
+email-validator==2.2.0
+phonenumbers==8.13.52
+
+# ── Integrations ─────────────────────────────────────────────────────────────
+httpx==0.28.1
+twilio==9.4.1                # OTP SMS
+cloudinary==1.41.0           # upload medias (images / video / audio / fichiers)
+firebase-admin==6.6.0        # push FCM
+livekit-api==0.8.2           # tokens LiveKit (appels — infra v2)
+
+# ── Utils ────────────────────────────────────────────────────────────────────
+python-slugify==8.0.4
+tenacity==9.0.0
+structlog==24.4.0
+
+# ── Dev / tests ──────────────────────────────────────────────────────────────
+pytest==8.3.4
+pytest-asyncio==0.25.0
+aiosqlite==0.20.0            # backend de test in-memory
+ruff==0.8.4
+Pillow>=10.4,<11

@@ -1,0 +1,60 @@
+{
+  "errors": {
+    "generic": "Une erreur est survenue.",
+    "not_found": "Ressource introuvable.",
+    "unauthorized": "Authentification requise.",
+    "forbidden": "Accès refusé.",
+    "conflict": "Ce contenu existe déjà.",
+    "rate_limited": "Trop de tentatives. Réessayez plus tard.",
+    "validation": "Certaines données sont invalides.",
+    "internal": "Erreur interne du serveur."
+  },
+  "auth": {
+    "invalid_credentials": "Identifiant ou mot de passe incorrect.",
+    "email_taken": "Cette adresse e-mail est déjà utilisée.",
+    "phone_taken": "Ce numéro de téléphone est déjà utilisé.",
+    "username_taken": "Ce nom d'utilisateur est déjà pris.",
+    "account_unverified": "Compte non vérifié. Saisissez le code reçu.",
+    "account_disabled": "Ce compte est désactivé.",
+    "token_expired": "Session expirée, reconnectez-vous.",
+    "refresh_invalid": "Jeton de rafraîchissement invalide."
+  },
+  "otp": {
+    "sms_body": "E-discussion : votre code de vérification est {code}. Valable {ttl_min} minutes.",
+    "email_subject": "Votre code de vérification E-discussion",
+    "email_body": "Bonjour,\n\nVotre code de vérification est : {code}\nIl expire dans {ttl_min} minutes.\n\nL'équipe E-discussion.",
+    "invalid": "Code de vérification invalide.",
+    "expired": "Code de vérification expiré.",
+    "too_many_attempts": "Trop de tentatives. Demandez un nouveau code."
+  },
+  "conversation": {
+    "not_found": "Conversation introuvable.",
+    "blocked": "Vous ne pouvez pas envoyer de message à cet utilisateur.",
+    "request_pending": "Votre demande de conversation est en attente d'acceptation.",
+    "cannot_message_self": "Vous ne pouvez pas vous envoyer de message."
+  },
+  "message": {
+    "not_found": "Message introuvable.",
+    "not_owner": "Vous ne pouvez modifier que vos propres messages.",
+    "edit_window_closed": "Ce message ne peut plus être modifié."
+  },
+  "user": {
+    "not_found": "Utilisateur introuvable.",
+    "cannot_block_self": "Vous ne pouvez pas vous bloquer vous-même."
+  },
+  "media": {
+    "unsupported_type": "Type de fichier non pris en charge.",
+    "empty_file": "Fichier vide.",
+    "too_large": "Fichier trop volumineux (max {max_mb} Mo)."
+  },
+  "calls": {
+    "disabled": "Les appels ne sont pas disponibles pour le moment.",
+    "not_found": "Appel introuvable.",
+    "callee_not_found": "Ce contact est indisponible.",
+    "cannot_call_self": "Vous ne pouvez pas vous appeler vous-même.",
+    "blocked": "Impossible d'appeler ce contact.",
+    "already_in_call": "Un appel est déjà en cours avec ce contact.",
+    "not_ringing": "Cet appel ne sonne plus.",
+    "still_active": "Cet appel est encore en cours."
+  }
+}
