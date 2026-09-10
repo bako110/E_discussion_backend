@@ -40,6 +40,9 @@ class CallStartOut(CallOut):
     livekit_url: str
     token: str
     e2ee_key: str | None = None
+    # le destinataire a-t-il un WebSocket actif ? l'appelant adapte sa
+    # tonalite de retour d'appel (sonne normalement vs "indisponible").
+    callee_online: bool = True
 
 
 class CallTokenOut(BaseModel):

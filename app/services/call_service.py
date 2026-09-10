@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.errors import AppError, ForbiddenError, NotFoundError
+from app.db.redis import is_online
 from app.db.models.call import (
     CallDirection,
     CallLog,
@@ -223,6 +224,8 @@ async def start(db: AsyncSession, me: User, body: CallStartIn) -> CallStartOut:
     # sonnerie limitée dans le temps -> 'missed' automatique
     _arm_ring_timer(call.id)
 
+    callee_online = await is_online(str(body.callee_id))
+
     base = CallOut.model_validate(call)
     base.peer = await _peer_public(db, me, body.callee_id)
     return CallStartOut(
@@ -230,6 +233,7 @@ async def start(db: AsyncSession, me: User, body: CallStartIn) -> CallStartOut:
         livekit_url=settings.LIVEKIT_URL,
         token=token,
         e2ee_key=call.e2ee_key,
+        callee_online=callee_online,
     )
 
 
