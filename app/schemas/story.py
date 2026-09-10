@@ -17,7 +17,8 @@ class StoryCreate(BaseModel):
     caption: str | None = Field(None, max_length=2000)
     background_color: str | None = Field(None, max_length=16)
     font: str | None = Field(None, max_length=32)
-    duration_sec: int = Field(5, ge=1, le=120)
+    # borne large : l'utilisateur decoupe deja le segment cote client
+    duration_sec: int = Field(5, ge=1, le=600)
     thumbnail_url: str | None = Field(None, max_length=1024)
     audio_url: str | None = Field(None, max_length=1024)
     audio_name: str | None = Field(None, max_length=120)
@@ -30,7 +31,7 @@ class StoryUpdate(BaseModel):
     caption: str | None = Field(None, max_length=2000)
     background_color: str | None = Field(None, max_length=16)
     font: str | None = Field(None, max_length=32)
-    duration_sec: int | None = Field(None, ge=1, le=120)
+    duration_sec: int | None = Field(None, ge=1, le=600)
 
 
 class StoryOut(ORMModel):
