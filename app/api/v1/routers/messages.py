@@ -7,7 +7,12 @@ from fastapi import APIRouter
 
 from app.api.deps import CurrentUser, DbSession
 from app.schemas.common import Message
-from app.schemas.conversation import MessageEdit, MessageOut, ReactionIn
+from app.schemas.conversation import (
+    MessageEdit,
+    MessageInfoOut,
+    MessageOut,
+    ReactionIn,
+)
 from app.services import message_service
 
 router = APIRouter()
@@ -41,3 +46,16 @@ async def react_message(
 async def ack_delivered(message_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
     await message_service.mark_delivered(db, current_user.id, message_id)
     return Message(message="ok")
+
+
+@router.post("/{message_id}/played", response_model=Message)
+async def ack_played(message_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    """Le destinataire a ecoute le vocal / ouvert la video."""
+    await message_service.mark_played(db, current_user, message_id)
+    return Message(message="ok")
+
+
+@router.get("/{message_id}/info", response_model=MessageInfoOut)
+async def message_info(message_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    """Ecran « Infos » (expediteur uniquement) : horodatages du destinataire."""
+    return await message_service.message_info(db, current_user, message_id)

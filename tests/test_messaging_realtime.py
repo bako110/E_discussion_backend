@@ -260,6 +260,53 @@ async def test_message_order_preserved(client, _capture_otp, _patch_redis):
     assert [ev["message"]["body"] for ev in incoming] == bodies, "ordre d'arrivée respecté"
 
 
+async def test_message_info_timestamps(client, _capture_otp, db_session):
+    """Ecran « Infos » : sent / delivered / read / played (vocal-video)."""
+    import uuid as _uuid
+
+    from app.services import message_service as _msg
+
+    a_token, a_id = await _register(client, _capture_otp, "+33612345690")
+    b_token, b_id = await _register(client, _capture_otp, "+33612345691")
+    ah = {"Authorization": f"Bearer {a_token}"}
+    bh = {"Authorization": f"Bearer {b_token}"}
+
+    conv = (
+        await client.post("/api/v1/conversations", json={"partner_id": b_id}, headers=ah)
+    ).json()
+    cid = conv["id"]
+
+    sent = (
+        await client.post(
+            f"/api/v1/conversations/{cid}/messages",
+            json={"type": "voice", "body": "", "attachment_url": "https://x/v.m4a"},
+            headers=ah,
+        )
+    ).json()
+    mid = sent["id"]
+
+    # avant tout accuse : distribue/lu/joue nuls
+    info = (await client.get(f"/api/v1/messages/{mid}/info", headers=ah)).json()
+    assert info["type"] == "voice"
+    assert info["sent_at"] is not None
+    assert info["delivered_at"] is None and info["read_at"] is None
+    assert info["played_at"] is None
+
+    # B accuse reception, lit, puis ecoute le vocal
+    await _msg.mark_delivered(db_session, _uuid.UUID(b_id), _uuid.UUID(mid))
+    await client.put(f"/api/v1/conversations/{cid}/read", headers=bh)
+    await client.post(f"/api/v1/messages/{mid}/played", headers=bh)
+
+    info = (await client.get(f"/api/v1/messages/{mid}/info", headers=ah)).json()
+    assert info["delivered_at"] is not None
+    assert info["read_at"] is not None
+    assert info["played_at"] is not None
+
+    # B (le destinataire) ne peut PAS voir les infos
+    r = await client.get(f"/api/v1/messages/{mid}/info", headers=bh)
+    assert r.status_code == 403
+
+
 async def test_encrypted_push_preview_is_generic(client, _capture_otp, _patch_redis, monkeypatch):
     """L'aperçu de notification push d'un message chiffré ne doit RIEN révéler."""
     captured: list[dict] = []

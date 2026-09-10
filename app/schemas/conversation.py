@@ -38,6 +38,7 @@ class MessageOut(ORMModel):
     reaction: str | None = None            # reaction de l'utilisateur courant
     delivered: bool = False
     read: bool = False
+    played: bool = False                    # vocal ecoute / video ouverte (dest)
     edited_at: datetime | None
     deleted_at: datetime | None
     created_at: datetime
@@ -63,6 +64,17 @@ class MessageEdit(BaseModel):
 
 class ReactionIn(BaseModel):
     emoji: str | None = Field(None, max_length=16, description="null = retirer la reaction")
+
+
+class MessageInfoOut(BaseModel):
+    """Ecran « Infos » d'un message (vu par l'expediteur)."""
+
+    type: str
+    sent_at: datetime
+    delivered_at: datetime | None = None
+    read_at: datetime | None = None
+    # vocal ecoute / video ouverte par le destinataire
+    played_at: datetime | None = None
 
 
 # ── Conversations ──────────────────────────────────────────────────────────

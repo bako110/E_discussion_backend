@@ -134,4 +134,10 @@ class MessageReceipt(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         index=True,
         nullable=False,
     )
+    # etat courant des coches (delivered -> read) ; 'played' n'y touche pas
     state: Mapped[ReceiptState] = mapped_column(Enum(ReceiptState), nullable=False)
+    # horodatages figes (chaque etape garde le sien) — pour l'ecran « Infos »
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # vocal ecoute / video ouverte par le destinataire
+    played_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

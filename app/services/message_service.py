@@ -64,22 +64,30 @@ async def _serialize(
     if row:
         my_reaction = row[0]
 
-    delivered = read = False
+    delivered = read = played = False
     if m.sender_id == viewer_id:
         rc = await db.execute(
-            select(MessageReceipt.state).where(MessageReceipt.message_id == m.id)
+            select(MessageReceipt.state, MessageReceipt.played_at).where(
+                MessageReceipt.message_id == m.id
+            )
         )
-        states = {s for (s,) in rc.all()}
+        states: set = set()
+        for st, played_at in rc.all():
+            states.add(st)
+            if played_at is not None:
+                played = True
         delivered = ReceiptState.delivered in states or ReceiptState.read in states
         # reciprocite WhatsApp : si J'AI desactive les accuses de lecture, je ne
-        # vois pas non plus quand l'autre a lu mes messages.
+        # vois pas non plus quand l'autre a lu / ecoute mes messages.
         read = viewer_read_receipts and (ReceiptState.read in states)
+        played = viewer_read_receipts and played
 
     out = MessageOut.model_validate(m)
     out.reply_to = reply
     out.reaction = my_reaction
     out.delivered = delivered
     out.read = read
+    out.played = played
     return out
 
 
@@ -220,12 +228,25 @@ async def mark_read(db: AsyncSession, me: User, conversation_id: uuid.UUID) -> i
         )
     ).all()
 
+    now = datetime.now(UTC)
     senders: set[uuid.UUID] = set()
     for msg, receipt in rows:
         if receipt is None:
-            db.add(MessageReceipt(message_id=msg.id, user_id=me.id, state=ReceiptState.read))
+            db.add(
+                MessageReceipt(
+                    message_id=msg.id,
+                    user_id=me.id,
+                    state=ReceiptState.read,
+                    delivered_at=now,
+                    read_at=now,
+                )
+            )
         else:
             receipt.state = ReceiptState.read
+            if receipt.delivered_at is None:
+                receipt.delivered_at = receipt.created_at or now
+            if receipt.read_at is None:
+                receipt.read_at = now
         senders.add(msg.sender_id)
     await db.flush()
 
@@ -251,7 +272,14 @@ async def mark_delivered(db: AsyncSession, user_id: uuid.UUID, message_id: uuid.
     msg = await db.get(Message, message_id)
     if msg is None:
         return
-    db.add(MessageReceipt(message_id=message_id, user_id=user_id, state=ReceiptState.delivered))
+    db.add(
+        MessageReceipt(
+            message_id=message_id,
+            user_id=user_id,
+            state=ReceiptState.delivered,
+            delivered_at=datetime.now(UTC),
+        )
+    )
     await db.flush()
     # notifie l'expediteur : double coche grise (message.new -> "remis").
     # On relaie AUSSI `client_id` : cote client la ligne locale peut encore
@@ -265,6 +293,71 @@ async def mark_delivered(db: AsyncSession, user_id: uuid.UUID, message_id: uuid.
             "client_id": msg.client_id,
         },
     )
+
+
+async def mark_played(db: AsyncSession, me: User, message_id: uuid.UUID) -> None:
+    """Le destinataire a ECOUTE un vocal / OUVERT une video. Horodate une seule
+    fois `played_at` et previent l'expediteur (WS `receipt.played`)."""
+    msg = await db.get(Message, message_id)
+    if msg is None or msg.deleted_at is not None:
+        raise NotFoundError("message.not_found", code="message_not_found")
+    if msg.sender_id == me.id:
+        return  # l'expediteur ne "joue" pas son propre message
+    # le lecteur doit appartenir a la conversation
+    await conversation_service.get_owned(db, me, msg.conversation_id)
+
+    now = datetime.now(UTC)
+    receipt = await db.scalar(
+        select(MessageReceipt).where(
+            MessageReceipt.message_id == message_id,
+            MessageReceipt.user_id == me.id,
+        )
+    )
+    if receipt is None:
+        receipt = MessageReceipt(
+            message_id=message_id,
+            user_id=me.id,
+            state=ReceiptState.delivered,
+            delivered_at=now,
+            played_at=now,
+        )
+        db.add(receipt)
+    elif receipt.played_at is None:
+        receipt.played_at = now
+    else:
+        return  # deja horodate
+    await db.flush()
+
+    if me.read_receipts:
+        await manager.send_to_user(
+            str(msg.sender_id),
+            {
+                "type": "receipt.played",
+                "conversation_id": str(msg.conversation_id),
+                "message_id": str(message_id),
+            },
+        )
+
+
+async def message_info(db: AsyncSession, me: User, message_id: uuid.UUID) -> dict:
+    """Ecran « Infos » (expediteur uniquement) : horodatages distribue / lu /
+    ecoute-ouvert du destinataire."""
+    msg = await db.get(Message, message_id)
+    if msg is None:
+        raise NotFoundError("message.not_found", code="message_not_found")
+    if msg.sender_id != me.id:
+        raise ForbiddenError("message.not_owner", code="not_owner")
+
+    receipt = await db.scalar(
+        select(MessageReceipt).where(MessageReceipt.message_id == message_id)
+    )
+    return {
+        "type": msg.type.value,
+        "sent_at": msg.created_at,
+        "delivered_at": receipt.delivered_at if receipt else None,
+        "read_at": receipt.read_at if receipt else None,
+        "played_at": receipt.played_at if receipt else None,
+    }
 
 
 async def edit(db: AsyncSession, me: User, message_id: uuid.UUID, body: str) -> MessageOut:
