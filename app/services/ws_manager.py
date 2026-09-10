@@ -61,14 +61,24 @@ class WsManager:
     # ── envoi ──────────────────────────────────────────────────────────
     async def send_to_user(self, user_id: str, payload: dict) -> None:
         """Publie via Redis -> tous les workers -> toutes les sockets de l'user."""
-        await get_redis().publish(f"ws:user:{user_id}", json.dumps(payload))
+        n = await get_redis().publish(f"ws:user:{user_id}", json.dumps(payload))
+        log.info(
+            "ws.publish",
+            user_id=user_id,
+            type=payload.get("type"),
+            subscribers=n,
+            local=len(self._local.get(user_id, ())),
+        )
 
     async def _deliver_local(self, user_id: str, raw: str) -> None:
+        socks = list(self._local.get(user_id, ()))
+        log.info("ws.deliver_local", user_id=user_id, n=len(socks))
         dead: list[WebSocket] = []
-        for ws in list(self._local.get(user_id, ())):
+        for ws in socks:
             try:
                 await ws.send_text(raw)
-            except Exception:
+            except Exception as e:
+                log.warning("ws.deliver_failed", error=repr(e))
                 dead.append(ws)
         for ws in dead:
             await self.disconnect(user_id, ws)
@@ -103,7 +113,9 @@ class WsManager:
                     continue
                 channel: str = msg["channel"]
                 user_id = channel.rsplit(":", 1)[-1]
-                if user_id in self._local:
+                here = user_id in self._local
+                log.info("ws.pubsub.recv", user_id=user_id, local_hit=here)
+                if here:
                     await self._deliver_local(user_id, msg["data"])
         except asyncio.CancelledError:
             await pubsub.aclose()
