@@ -42,6 +42,26 @@ async def register_keys(db: AsyncSession, user_id: uuid.UUID, data: RegisterKeys
     device.revoked = False
     await db.flush()
 
+    # Modele SINGLE-DEVICE (Phase 1) : un seul appareil actif par compte.
+    # Quand un appareil s'enregistre (reinstall, changement de tel...), on
+    # revoque tous les AUTRES et on jette leurs OTPK non consommees — sinon
+    # `bundles()` pourrait servir le bundle d'un ancien appareil dont le pair
+    # n'a plus les cles privees -> messages a jamais indechiffrables.
+    others = (
+        await db.execute(
+            select(Device).where(
+                Device.user_id == user_id,
+                Device.id != device.id,
+                Device.revoked.is_(False),
+            )
+        )
+    ).scalars().all()
+    for old in others:
+        old.revoked = True
+        await db.execute(
+            OneTimePreKey.__table__.delete().where(OneTimePreKey.device_pk == old.id)
+        )
+
     for otpk in data.one_time_prekeys:
         db.add(
             OneTimePreKey(device_pk=device.id, key_id=otpk.key_id, public_key=otpk.public_key)
@@ -81,10 +101,13 @@ async def keys_count(db: AsyncSession, user_id: uuid.UUID) -> list[KeysCountOut]
 
 
 async def get_bundles(db: AsyncSession, target_user_id: uuid.UUID) -> list[PreKeyBundleOut]:
-    """Un bundle par appareil actif du destinataire. Consomme une OTPK par
-    appareil si disponible (sinon bundle sans OTPK — X3DH degrade)."""
+    """Bundle(s) de l'appareil actif du destinataire. Modele single-device :
+    on renvoie le PLUS RECENT en premier (le client n'utilise que `[0]`).
+    Consomme une OTPK si disponible (sinon bundle sans OTPK — X3DH degrade)."""
     res = await db.execute(
-        select(Device).where(Device.user_id == target_user_id, Device.revoked.is_(False))
+        select(Device)
+        .where(Device.user_id == target_user_id, Device.revoked.is_(False))
+        .order_by(Device.updated_at.desc(), Device.created_at.desc())
     )
     devices = res.scalars().all()
     if not devices:
