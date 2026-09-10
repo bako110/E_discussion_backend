@@ -18,6 +18,7 @@ import jwt
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import update
 
+from app.core.logging import get_logger
 from app.core.security import decode_token
 from app.db.models.user import User
 from app.db.redis import mark_online
@@ -27,6 +28,7 @@ from app.services.conversation_service import get_owned
 from app.services.ws_manager import manager
 
 router = APIRouter()
+log = get_logger(__name__)
 
 
 async def _authenticate(ws: WebSocket) -> str | None:
@@ -34,13 +36,25 @@ async def _authenticate(ws: WebSocket) -> str | None:
     l'user_id ou None si echec."""
     try:
         raw = await ws.receive_text()
-        data = json.loads(raw)
-        if data.get("type") != "auth" or "token" not in data:
-            return None
-        payload = decode_token(data["token"], expected_type="access")
-        return payload.get("sub")
-    except (WebSocketDisconnect, json.JSONDecodeError, jwt.PyJWTError, KeyError):
+    except (WebSocketDisconnect, RuntimeError) as e:
+        log.warning("ws.auth.no_frame", error=str(e))
         return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        log.warning("ws.auth.bad_json", raw=raw[:120])
+        return None
+    if data.get("type") != "auth" or "token" not in data:
+        log.warning("ws.auth.bad_shape", keys=list(data.keys()), type=data.get("type"))
+        return None
+    try:
+        payload = decode_token(data["token"], expected_type="access")
+    except (jwt.PyJWTError, KeyError) as e:
+        log.warning("ws.auth.bad_token", error=repr(e))
+        return None
+    sub = payload.get("sub")
+    log.info("ws.auth.ok", user_id=sub)
+    return sub
 
 
 @router.websocket("/ws")
