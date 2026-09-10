@@ -12,11 +12,14 @@ from app.schemas.common import Message
 from app.schemas.group import (
     AddMembersIn,
     GroupCreate,
+    GroupJoinRequestOut,
     GroupMemberOut,
     GroupMessageCreate,
     GroupMessageOut,
     GroupOut,
     GroupPreview,
+    GroupSettingsIn,
+    GroupSettingsOut,
     GroupUpdate,
     JoinIn,
     SetRoleIn,
@@ -79,6 +82,42 @@ async def reset_invite(group_id: uuid.UUID, current_user: CurrentUser, db: DbSes
 @router.get("/{group_id}/members", response_model=list[GroupMemberOut])
 async def get_members(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
     return await group_service.members(db, current_user, group_id)
+
+
+# ── Paramètres du groupe (admins) ────────────────────────────────────────
+@router.get("/{group_id}/settings", response_model=GroupSettingsOut)
+async def get_settings(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    return await group_service.get_settings(db, current_user, group_id)
+
+
+@router.put("/{group_id}/settings", response_model=GroupOut)
+async def set_settings(
+    group_id: uuid.UUID, body: GroupSettingsIn, current_user: CurrentUser, db: DbSession
+):
+    return await group_service.set_settings(
+        db, current_user, group_id, body.model_dump(exclude_unset=True)
+    )
+
+
+@router.get("/{group_id}/join-requests", response_model=list[GroupJoinRequestOut])
+async def join_requests(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    return await group_service.list_join_requests(db, current_user, group_id)
+
+
+@router.post("/{group_id}/join-requests/{user_id}/approve", response_model=Message)
+async def approve_join(
+    group_id: uuid.UUID, user_id: uuid.UUID, current_user: CurrentUser, db: DbSession
+):
+    await group_service.decide_join_request(db, current_user, group_id, user_id, True)
+    return Message(message="approved")
+
+
+@router.post("/{group_id}/join-requests/{user_id}/reject", response_model=Message)
+async def reject_join(
+    group_id: uuid.UUID, user_id: uuid.UUID, current_user: CurrentUser, db: DbSession
+):
+    await group_service.decide_join_request(db, current_user, group_id, user_id, False)
+    return Message(message="rejected")
 
 
 @router.post("/{group_id}/members", response_model=list[GroupMemberOut])

@@ -224,3 +224,71 @@ async def test_group_preview_by_code(client, _capture_otp):
     # code inconnu -> 404
     r = await client.get("/api/v1/groups/preview?code=zzzzzzzz", headers=bh)
     assert r.status_code == 404
+
+
+async def test_group_settings_and_join_approval(client, _capture_otp):
+    """Paramètres admin : message admins-only + adhésion sous approbation."""
+    admin_token, _ = await _register(client, _capture_otp, "+33677777701")
+    user_token, user_id = await _register(client, _capture_otp, "+33677777702")
+    ah = {"Authorization": f"Bearer {admin_token}"}
+    uh = {"Authorization": f"Bearer {user_token}"}
+
+    g = (
+        await client.post(
+            "/api/v1/groups", json={"kind": "group", "name": "Réglé"}, headers=ah
+        )
+    ).json()
+    gid, code = g["id"], g["invite_code"]
+
+    # défauts
+    r = await client.get(f"/api/v1/groups/{gid}/settings", headers=ah)
+    s = r.json()
+    assert s["send_messages_policy"] == "all"
+    assert s["join_approval_required"] is False
+
+    # un non-admin ne voit pas les paramètres
+    r = await client.get(f"/api/v1/groups/{gid}/settings", headers=uh)
+    assert r.status_code == 403
+
+    # active : messages admins-only + approbation requise
+    r = await client.put(
+        f"/api/v1/groups/{gid}/settings",
+        json={"send_messages_policy": "admins", "join_approval_required": True},
+        headers=ah,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["send_messages_policy"] == "admins"
+
+    # user tente de rejoindre -> mis en attente (403 join_pending)
+    r = await client.post(
+        "/api/v1/groups/join", json={"invite_code": code}, headers=uh
+    )
+    assert r.status_code == 403
+
+    # l'admin voit la demande
+    r = await client.get(f"/api/v1/groups/{gid}/join-requests", headers=ah)
+    reqs = r.json()
+    assert [x["user"]["id"] for x in reqs] == [user_id]
+
+    # l'admin approuve
+    r = await client.post(
+        f"/api/v1/groups/{gid}/join-requests/{user_id}/approve", headers=ah
+    )
+    assert r.status_code == 200
+
+    # user est maintenant membre mais ne peut pas écrire (admins-only)
+    r = await client.get("/api/v1/groups", headers=uh)
+    mine = next(x for x in r.json() if x["id"] == gid)
+    assert mine["my_role"] == "member"
+    assert mine["can_post"] is False
+
+    r = await client.post(
+        f"/api/v1/groups/{gid}/messages",
+        json={"type": "text", "body": "coucou"},
+        headers=uh,
+    )
+    assert r.status_code == 403
+
+    # plus de demande en attente
+    r = await client.get(f"/api/v1/groups/{gid}/join-requests", headers=ah)
+    assert r.json() == []

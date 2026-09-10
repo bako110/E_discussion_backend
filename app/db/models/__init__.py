@@ -8,7 +8,7 @@ from app.db.models.call import CallDirection, CallLog, CallStatus, CallType
 from app.db.models.contact import UserContact
 from app.db.models.conversation import Conversation, ConversationMute, ConversationRequest
 from app.db.models.device import Device, OneTimePreKey
-from app.db.models.group import Group, GroupMember, GroupMessage
+from app.db.models.group import Group, GroupJoinRequest, GroupMember, GroupMessage
 from app.db.models.message import Message, MessageReaction, MessageReceipt
 from app.db.models.privacy import PrivacyAudienceEntry, PrivacyField
 from app.db.models.push import DeviceToken
@@ -51,4 +51,5 @@ __all__ = [
     "Group",
     "GroupMember",
     "GroupMessage",
+    "GroupJoinRequest",
 ]

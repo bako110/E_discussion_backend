@@ -21,6 +21,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -68,6 +69,30 @@ class Group(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # chaine publique : figure dans l'annuaire "chaines populaires"
     is_public: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    # ── Parametres (facon WhatsApp — admins uniquement) ──────────────────
+    # 'all' (tous les membres) | 'admins' (lecture seule pour les autres)
+    send_messages_policy: Mapped[str] = mapped_column(
+        String(10), default="all", nullable=False
+    )
+    edit_info_policy: Mapped[str] = mapped_column(
+        String(10), default="admins", nullable=False
+    )
+    add_members_policy: Mapped[str] = mapped_column(
+        String(10), default="all", nullable=False
+    )
+    # les demandes via lien doivent etre approuvees par un admin
+    join_approval_required: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    # ce qui est montre aux membres : 'both' | 'link' | 'code'
+    invite_visibility: Mapped[str] = mapped_column(
+        String(10), default="both", nullable=False
+    )
+    # disparition auto des messages, en SECONDES (0 = desactive)
+    disappearing_seconds: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+
     last_message_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), index=True
     )
@@ -91,6 +116,22 @@ class GroupMember(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # marqueur "lu jusqu'a" pour le compteur de non-lus
     last_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     muted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class GroupJoinRequest(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Demande d'adhesion en attente (quand `join_approval_required`)."""
+
+    __tablename__ = "group_join_requests"
+    __table_args__ = (
+        UniqueConstraint("group_id", "user_id", name="uq_group_join_req"),
+    )
+
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("groups.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
 
 
 class GroupMessage(Base, UUIDPrimaryKeyMixin, TimestampMixin):

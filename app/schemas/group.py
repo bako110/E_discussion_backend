@@ -21,11 +21,39 @@ class GroupCreate(BaseModel):
     member_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
+_POLICY = r"^(all|admins)$"
+
+
 class GroupUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=120)
     description: str | None = Field(None, max_length=2000)
     avatar_url: str | None = Field(None, max_length=1024)
     is_public: bool | None = None
+
+
+class GroupSettingsIn(BaseModel):
+    """Paramètres du groupe (admins uniquement)."""
+
+    send_messages_policy: str | None = Field(None, pattern=_POLICY)
+    edit_info_policy: str | None = Field(None, pattern=_POLICY)
+    add_members_policy: str | None = Field(None, pattern=_POLICY)
+    join_approval_required: bool | None = None
+    invite_visibility: str | None = Field(None, pattern=r"^(both|link|code)$")
+    disappearing_seconds: int | None = Field(None, ge=0, le=7776000)  # <= 90 j
+
+
+class GroupSettingsOut(BaseModel):
+    send_messages_policy: str = "all"
+    edit_info_policy: str = "admins"
+    add_members_policy: str = "all"
+    join_approval_required: bool = False
+    invite_visibility: str = "both"
+    disappearing_seconds: int = 0
+
+
+class GroupJoinRequestOut(ORMModel):
+    user: UserPublic
+    requested_at: datetime
 
 
 class AddMembersIn(BaseModel):
@@ -62,6 +90,18 @@ class GroupOut(ORMModel):
     last_message_preview: str | None = None
     # true si l'utilisateur courant peut ecrire (groupe: membre+ ; chaine: admin+)
     can_post: bool = False
+    can_edit_info: bool = False
+    can_add_members: bool = False
+    # nb de demandes d'adhesion en attente (renseigne pour les admins)
+    pending_requests: int = 0
+
+    # parametres (miroir du modele — pratique pour l'ecran Parametres)
+    send_messages_policy: str = "all"
+    edit_info_policy: str = "admins"
+    add_members_policy: str = "all"
+    join_approval_required: bool = False
+    invite_visibility: str = "both"
+    disappearing_seconds: int = 0
 
 
 class GroupPreview(ORMModel):

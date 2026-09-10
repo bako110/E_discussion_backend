@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import AppError, ForbiddenError, NotFoundError
 from app.db.models.group import (
     Group,
+    GroupJoinRequest,
     GroupKind,
     GroupMember,
     GroupMessage,
@@ -74,6 +75,20 @@ async def _broadcast(db: AsyncSession, group_id: uuid.UUID, payload: dict) -> No
 def _can_post(group: Group, role: GroupRole) -> bool:
     if group.kind == GroupKind.channel:
         return role in _ADMIN_ROLES
+    if getattr(group, "send_messages_policy", "all") == "admins":
+        return role in _ADMIN_ROLES
+    return role in _POST_ROLES
+
+
+def _can_edit_info(group: Group, role: GroupRole) -> bool:
+    if getattr(group, "edit_info_policy", "admins") == "all":
+        return role in _POST_ROLES
+    return role in _ADMIN_ROLES
+
+
+def _can_add_members(group: Group, role: GroupRole) -> bool:
+    if getattr(group, "add_members_policy", "all") == "admins":
+        return role in _ADMIN_ROLES
     return role in _POST_ROLES
 
 
@@ -108,6 +123,17 @@ async def _serialize_group(
     out.unread_count = unread
     out.my_role = mem.role if mem else None
     out.can_post = _can_post(group, mem.role) if mem else False
+    out.can_edit_info = _can_edit_info(group, mem.role) if mem else False
+    out.can_add_members = _can_add_members(group, mem.role) if mem else False
+    if mem and mem.role in _ADMIN_ROLES and group.join_approval_required:
+        out.pending_requests = int(
+            await db.scalar(
+                select(func.count())
+                .select_from(GroupJoinRequest)
+                .where(GroupJoinRequest.group_id == group.id)
+            )
+            or 0
+        )
     if last_msg is not None:
         out.last_message_preview = (
             last_msg.body[:120] if last_msg.type == "text" else f"[{last_msg.type}]"
@@ -166,8 +192,8 @@ async def update_group(
     db: AsyncSession, me: User, group_id: uuid.UUID, data: GroupUpdate
 ) -> GroupOut:
     group, mem = await _require_member(db, group_id, me.id)
-    if mem.role not in _ADMIN_ROLES:
-        raise ForbiddenError("group.not_admin", code="not_admin")
+    if not _can_edit_info(group, mem.role):
+        raise ForbiddenError("group.cannot_edit_info", code="cannot_edit_info")
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(group, field, value)
     await db.flush()
@@ -235,6 +261,25 @@ async def members(db: AsyncSession, me: User, group_id: uuid.UUID) -> list[Group
 
 
 # ── adhesion ───────────────────────────────────────────────────────────────
+async def _add_member_now(db: AsyncSession, group: Group, user: User) -> None:
+    role = GroupRole.subscriber if group.kind == GroupKind.channel else GroupRole.member
+    db.add(GroupMember(group_id=group.id, user_id=user.id, role=role))
+    await db.flush()
+    sys = GroupMessage(
+        group_id=group.id,
+        sender_id=user.id,
+        type="system",
+        body=f"{user.display_name or user.username or 'Quelqu un'} a rejoint",
+    )
+    db.add(sys)
+    await db.flush()
+    await _broadcast(
+        db,
+        group.id,
+        {"type": "group.member", "group_id": str(group.id), "user_id": str(user.id), "action": "join"},
+    )
+
+
 async def join_by_code(db: AsyncSession, me: User, invite_code: str) -> GroupOut:
     group = await db.scalar(select(Group).where(Group.invite_code == invite_code))
     if group is None:
@@ -242,26 +287,118 @@ async def join_by_code(db: AsyncSession, me: User, invite_code: str) -> GroupOut
 
     existing = await _membership(db, group.id, me.id)
     if existing is None:
-        role = (
-            GroupRole.subscriber if group.kind == GroupKind.channel else GroupRole.member
-        )
-        db.add(GroupMember(group_id=group.id, user_id=me.id, role=role))
-        await db.flush()
-        # message systeme + notif membres
-        sys = GroupMessage(
-            group_id=group.id,
-            sender_id=me.id,
-            type="system",
-            body=f"{me.display_name or me.username or 'Quelqu un'} a rejoint",
-        )
-        db.add(sys)
-        await db.flush()
-        await _broadcast(
-            db,
-            group.id,
-            {"type": "group.member", "group_id": str(group.id), "user_id": str(me.id), "action": "join"},
-        )
+        if group.join_approval_required:
+            # demande en attente (idempotent)
+            already = await db.scalar(
+                select(GroupJoinRequest.id).where(
+                    GroupJoinRequest.group_id == group.id,
+                    GroupJoinRequest.user_id == me.id,
+                )
+            )
+            if already is None:
+                db.add(GroupJoinRequest(group_id=group.id, user_id=me.id))
+                await db.flush()
+                # notifie les admins
+                admins = (
+                    await db.execute(
+                        select(GroupMember.user_id).where(
+                            GroupMember.group_id == group.id,
+                            GroupMember.role.in_([GroupRole.owner, GroupRole.admin]),
+                        )
+                    )
+                ).scalars().all()
+                for aid in admins:
+                    await manager.send_to_user(
+                        str(aid),
+                        {
+                            "type": "group.join_request",
+                            "group_id": str(group.id),
+                            "user_id": str(me.id),
+                        },
+                    )
+            raise ForbiddenError("group.join_pending", code="join_pending")
+        await _add_member_now(db, group, me)
     return await _serialize_group(db, group, me_id=me.id)
+
+
+# ── parametres du groupe (admins) ────────────────────────────────────────
+async def get_settings(db: AsyncSession, me: User, group_id: uuid.UUID) -> dict:
+    group, _ = await _require_admin(db, group_id, me.id)
+    return {
+        "send_messages_policy": group.send_messages_policy,
+        "edit_info_policy": group.edit_info_policy,
+        "add_members_policy": group.add_members_policy,
+        "join_approval_required": group.join_approval_required,
+        "invite_visibility": group.invite_visibility,
+        "disappearing_seconds": group.disappearing_seconds,
+    }
+
+
+async def set_settings(
+    db: AsyncSession, me: User, group_id: uuid.UUID, patch: dict
+) -> GroupOut:
+    group, _ = await _require_admin(db, group_id, me.id)
+    for field, value in patch.items():
+        if value is not None and hasattr(group, field):
+            setattr(group, field, value)
+    await db.flush()
+    await _broadcast(
+        db, group_id, {"type": "group.updated", "group_id": str(group_id)}
+    )
+    return await _serialize_group(db, group, me_id=me.id)
+
+
+async def list_join_requests(
+    db: AsyncSession, me: User, group_id: uuid.UUID
+) -> list[dict]:
+    await _require_admin(db, group_id, me.id)
+    rows = (
+        await db.execute(
+            select(GroupJoinRequest, User)
+            .join(User, User.id == GroupJoinRequest.user_id)
+            .where(GroupJoinRequest.group_id == group_id)
+            .order_by(GroupJoinRequest.created_at)
+        )
+    ).all()
+    return [
+        {
+            "user": await user_service.serialize_public(u),
+            "requested_at": req.created_at,
+        }
+        for req, u in rows
+    ]
+
+
+async def decide_join_request(
+    db: AsyncSession,
+    me: User,
+    group_id: uuid.UUID,
+    target_id: uuid.UUID,
+    approve: bool,
+) -> None:
+    group, _ = await _require_admin(db, group_id, me.id)
+    req = await db.scalar(
+        select(GroupJoinRequest).where(
+            GroupJoinRequest.group_id == group_id,
+            GroupJoinRequest.user_id == target_id,
+        )
+    )
+    if req is None:
+        raise NotFoundError("group.request_not_found", code="request_not_found")
+    await db.delete(req)
+    await db.flush()
+    if approve:
+        target = await db.get(User, target_id)
+        if target is not None and await _membership(db, group_id, target_id) is None:
+            await _add_member_now(db, group, target)
+    await manager.send_to_user(
+        str(target_id),
+        {
+            "type": "group.join_decided",
+            "group_id": str(group_id),
+            "approved": approve,
+        },
+    )
 
 
 async def leave(db: AsyncSession, me: User, group_id: uuid.UUID) -> None:
@@ -307,7 +444,9 @@ async def _require_admin(
 async def add_members(
     db: AsyncSession, me: User, group_id: uuid.UUID, user_ids: list[uuid.UUID]
 ) -> list[GroupMemberOut]:
-    group, _ = await _require_admin(db, group_id, me.id)
+    group, mem = await _require_member(db, group_id, me.id)
+    if not _can_add_members(group, mem.role):
+        raise ForbiddenError("group.cannot_add_members", code="cannot_add_members")
     base_role = (
         GroupRole.subscriber if group.kind == GroupKind.channel else GroupRole.member
     )
