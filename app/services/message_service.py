@@ -160,7 +160,9 @@ async def send(
                 "conversation_id": str(conv.id),
                 "sender_id": str(me.id),
                 "sender_name": sender_name,
+                "sender_avatar": me.avatar_url or "",
                 "message_id": str(msg.id),
+                "message_type": msg.type.value,
                 "encrypted": "1" if msg.encrypted else "0",
             },
         )

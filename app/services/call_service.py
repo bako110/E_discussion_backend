@@ -203,12 +203,21 @@ async def start(db: AsyncSession, me: User, body: CallStartIn) -> CallStartOut:
             "ring_timeout": settings.CALL_RING_TIMEOUT,
         },
     )
+    _caller_name = caller_public.display_name or caller_public.username or "Appel"
     await push_service.push_to_user(
         db,
         body.callee_id,
-        title=caller_public.display_name or caller_public.username or "Appel",
+        title=_caller_name,
         body="Appel vidéo entrant" if call.call_type == CallType.video else "Appel entrant",
-        data={"type": "call.incoming", "call_id": str(call.id), "call_type": call.call_type.value},
+        data={
+            "type": "call.incoming",
+            "call_id": str(call.id),
+            "call_type": call.call_type.value,
+            "room_name": room_name,
+            "caller_id": str(me.id),
+            "caller_name": _caller_name,
+            "caller_avatar": caller_public.avatar_url or "",
+        },
     )
 
     # sonnerie limitée dans le temps -> 'missed' automatique

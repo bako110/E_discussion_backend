@@ -34,23 +34,63 @@ def _init_fcm() -> bool:
 
 
 async def push_to_user(
-    db: AsyncSession, user_id: uuid.UUID, *, title: str, body: str, data: dict[str, str] | None = None
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    *,
+    title: str,
+    body: str,
+    data: dict[str, str] | None = None,
+    high_priority: bool = True,
 ) -> None:
+    """Envoi FCM **data-only**, priorité haute.
+
+    On n'envoie PAS de bloc `notification` : le client (react-native-firebase
+    + notifee) construit lui-même la notif dans son handler background, même
+    app tuée. Ça permet la sonnerie d'appel plein écran et un rendu cohérent
+    avec le cas app-ouverte. `title`/`body` sont passés DANS `data`.
+    """
     rows = await db.execute(select(DeviceToken.token).where(DeviceToken.user_id == user_id))
     tokens = [t for (t,) in rows.all()]
     if not tokens:
         return
+
+    payload: dict[str, str] = {k: str(v) for k, v in (data or {}).items()}
+    payload.setdefault("title", title)
+    payload.setdefault("body", body)
+
     if not _init_fcm():
-        log.info("push.console", user_id=str(user_id), title=title, body=body, data=data)
+        log.info("push.console", user_id=str(user_id), title=title, body=body, data=payload)
         return
     from firebase_admin import messaging  # type: ignore
 
+    android = messaging.AndroidConfig(
+        priority="high" if high_priority else "normal",
+        ttl=45 if payload.get("type", "").startswith("call") else 3600,
+    )
+    apns = messaging.APNSConfig(
+        headers={"apns-priority": "10", "apns-push-type": "background"},
+        payload=messaging.APNSPayload(aps=messaging.Aps(content_available=True)),
+    )
     msg = messaging.MulticastMessage(
         tokens=tokens,
-        notification=messaging.Notification(title=title, body=body),
-        data={k: str(v) for k, v in (data or {}).items()},
+        data=payload,
+        android=android,
+        apns=apns,
     )
     try:
-        messaging.send_each_for_multicast(msg)
+        resp = messaging.send_each_for_multicast(msg)
+        # nettoyage des jetons morts
+        stale: list[str] = []
+        for tok, res in zip(tokens, resp.responses):
+            if res.success:
+                continue
+            err = getattr(res.exception, "code", "") or str(res.exception)
+            if "registration-token-not-registered" in str(err) or "invalid-argument" in str(err):
+                stale.append(tok)
+        if stale:
+            from app.db.models.push import DeviceToken as _DT
+
+            await db.execute(_DT.__table__.delete().where(_DT.token.in_(stale)))
+            log.info("push.pruned_stale_tokens", count=len(stale))
     except Exception as e:  # pragma: no cover
         log.warning("push.send_failed", error=str(e))
