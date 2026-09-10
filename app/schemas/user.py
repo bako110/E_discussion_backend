@@ -32,6 +32,8 @@ class UserMe(UserPublic):
     last_seen_privacy: str = "everyone"
     profile_photo_privacy: str = "everyone"
     about_privacy: str = "everyone"
+    # confidentialite des statuts (la liste est servie par GET /stories/audience)
+    story_audience_mode: str = "contacts"
     read_receipts: bool = True
     # preferences d'appel (synchronisees entre appareils)
     call_ringtone: str = "default"

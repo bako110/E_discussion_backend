@@ -9,6 +9,8 @@ from app.api.deps import CurrentUser, DbSession
 from app.schemas.common import Message
 from app.schemas.conversation import MessageOut
 from app.schemas.story import (
+    StoryAudienceIn,
+    StoryAudienceOut,
     StoryCreate,
     StoryFeedItem,
     StoryOut,
@@ -26,6 +28,19 @@ router = APIRouter()
 async def get_feed(current_user: CurrentUser, db: DbSession):
     """Stories des contacts, groupees par auteur."""
     return await story_service.feed(db, current_user)
+
+
+@router.get("/audience", response_model=StoryAudienceOut)
+async def get_audience(current_user: CurrentUser, db: DbSession):
+    """Confidentialité des statuts (mode + contacts listés)."""
+    return await story_service.get_audience(db, current_user)
+
+
+@router.put("/audience", response_model=StoryAudienceOut)
+async def set_audience(body: StoryAudienceIn, current_user: CurrentUser, db: DbSession):
+    return await story_service.set_audience(
+        db, current_user, body.mode, body.contact_ids
+    )
 
 
 @router.get("/mine", response_model=list[StoryOut])

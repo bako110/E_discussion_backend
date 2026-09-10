@@ -69,6 +69,18 @@ class StoryFeedItem(BaseModel):
     latest_at: datetime
 
 
+class StoryAudienceOut(BaseModel):
+    """Confidentialité des statuts façon WhatsApp."""
+
+    mode: str = Field("contacts", pattern="^(contacts|contacts_except|only)$")
+    contact_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class StoryAudienceIn(BaseModel):
+    mode: str = Field(..., pattern="^(contacts|contacts_except|only)$")
+    contact_ids: list[uuid.UUID] = Field(default_factory=list, max_length=1000)
+
+
 class StoryReactionIn(BaseModel):
     emoji: str = Field(..., min_length=1, max_length=16)
 

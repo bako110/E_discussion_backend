@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ForbiddenError, NotFoundError
 from app.db.models.conversation import Conversation
 from app.db.models.message import Message, MessageType
-from app.db.models.story import Story, StoryReaction, StoryView
+from app.db.models.story import Story, StoryAudienceEntry, StoryReaction, StoryView
 from app.db.models.user import User
 from app.schemas.story import (
     StoryCreate,
@@ -44,6 +44,44 @@ async def _contact_ids(db: AsyncSession, me_id: uuid.UUID) -> set[uuid.UUID]:
     for a, b in rows:
         ids.add(b if a == me_id else a)
     return ids
+
+
+async def _audience_list(db: AsyncSession, owner_id: uuid.UUID) -> set[uuid.UUID]:
+    """Contacts listés pour la confidentialité des statuts de `owner`."""
+    rows = (
+        await db.execute(
+            select(StoryAudienceEntry.target_id).where(
+                StoryAudienceEntry.owner_id == owner_id
+            )
+        )
+    ).scalars().all()
+    return set(rows)
+
+
+async def _story_audience_ids(db: AsyncSession, author: User) -> set[uuid.UUID]:
+    """Ensemble des utilisateurs autorisés à voir les statuts de `author`,
+    évalué MAINTENANT (façon WhatsApp).
+
+    - `contacts`         -> tous les contacts,
+    - `contacts_except`  -> contacts moins la liste,
+    - `only`             -> intersection(contacts, liste).
+    """
+    contacts = await _contact_ids(db, author.id)
+    mode = getattr(author, "story_audience_mode", "contacts") or "contacts"
+    if mode == "contacts":
+        return contacts
+    listed = await _audience_list(db, author.id)
+    if mode == "contacts_except":
+        return contacts - listed
+    if mode == "only":
+        return contacts & listed
+    return contacts
+
+
+async def _can_view_stories(db: AsyncSession, author: User, viewer_id: uuid.UUID) -> bool:
+    if author.id == viewer_id:
+        return True
+    return viewer_id in await _story_audience_ids(db, author)
 
 
 async def _serialize(
@@ -99,8 +137,8 @@ async def create_story(db: AsyncSession, me: User, data: StoryCreate) -> StoryOu
     db.add(story)
     await db.flush()
 
-    # notifier les contacts (event WS leger — le client rafraichit son feed)
-    for cid in await _contact_ids(db, me.id):
+    # notifier uniquement l'audience autorisee (event WS leger)
+    for cid in await _story_audience_ids(db, me):
         await manager.send_to_user(
             str(cid),
             {"type": "story.new", "author_id": str(me.id), "story_id": str(story.id)},
@@ -123,7 +161,7 @@ async def update_story(
     story.edited_at = datetime.now(UTC)
     await db.flush()
 
-    for cid in await _contact_ids(db, me.id):
+    for cid in await _story_audience_ids(db, me):
         await manager.send_to_user(
             str(cid),
             {"type": "story.updated", "author_id": str(me.id), "story_id": str(story.id)},
@@ -140,7 +178,7 @@ async def delete_story(db: AsyncSession, me: User, story_id: uuid.UUID) -> None:
     story.deleted_at = datetime.now(UTC)
     await db.flush()
 
-    for cid in await _contact_ids(db, me.id):
+    for cid in await _story_audience_ids(db, me):
         await manager.send_to_user(
             str(cid),
             {"type": "story.deleted", "author_id": str(me.id), "story_id": str(story.id)},
@@ -191,6 +229,9 @@ async def feed(db: AsyncSession, me: User) -> list[StoryFeedItem]:
         author = authors.get(author_id)
         if author is None:
             continue
+        # confidentialite des statuts de l'auteur (evaluee maintenant)
+        if not await _can_view_stories(db, author, me.id):
+            continue
         serialized = [await _serialize(db, s, me_id=me.id) for s in stories]
         items.append(
             StoryFeedItem(
@@ -209,9 +250,48 @@ async def _get_visible(db: AsyncSession, me: User, story_id: uuid.UUID) -> Story
     if story is None or story.deleted_at is not None or story.expires_at <= datetime.now(UTC):
         raise NotFoundError("story.not_found", code="story_not_found")
     if story.author_id != me.id:
-        if story.author_id not in await _contact_ids(db, me.id):
+        author = await db.get(User, story.author_id)
+        if author is None or not await _can_view_stories(db, author, me.id):
             raise ForbiddenError("story.not_visible", code="not_visible")
     return story
+
+
+# ── confidentialite des statuts ───────────────────────────────────────────
+_VALID_MODES = {"contacts", "contacts_except", "only"}
+
+
+async def get_audience(db: AsyncSession, me: User) -> dict:
+    return {
+        "mode": getattr(me, "story_audience_mode", "contacts") or "contacts",
+        "contact_ids": [str(x) for x in await _audience_list(db, me.id)],
+    }
+
+
+async def set_audience(
+    db: AsyncSession, me: User, mode: str, contact_ids: list[uuid.UUID]
+) -> dict:
+    if mode not in _VALID_MODES:
+        raise ForbiddenError("story.bad_mode", code="bad_mode")
+    me.story_audience_mode = mode
+
+    # on ne garde dans la liste que de vrais contacts
+    contacts = await _contact_ids(db, me.id)
+    wanted = {c for c in contact_ids if c in contacts} if mode != "contacts" else set()
+
+    current = await _audience_list(db, me.id)
+    to_add = wanted - current
+    to_del = current - wanted
+    if to_del:
+        await db.execute(
+            StoryAudienceEntry.__table__.delete().where(
+                StoryAudienceEntry.owner_id == me.id,
+                StoryAudienceEntry.target_id.in_(to_del),
+            )
+        )
+    for tid in to_add:
+        db.add(StoryAudienceEntry(owner_id=me.id, target_id=tid))
+    await db.flush()
+    return {"mode": mode, "contact_ids": [str(x) for x in wanted]}
 
 
 # ── vues ───────────────────────────────────────────────────────────────────

@@ -48,6 +48,11 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     about_privacy: Mapped[str] = mapped_column(
         String(16), default="everyone", nullable=False
     )
+    # confidentialite des statuts (facon WhatsApp) :
+    #   'contacts' | 'contacts_except' | 'only'  (+ table story_audience_entries)
+    story_audience_mode: Mapped[str] = mapped_column(
+        String(20), default="contacts", nullable=False
+    )
     # accuses de lecture : si False, on n'envoie ni ne recoit les "vu"
     read_receipts: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 

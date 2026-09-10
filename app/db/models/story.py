@@ -93,3 +93,33 @@ class StoryReaction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         GUID(), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
     )
     emoji: Mapped[str] = mapped_column(String(16), nullable=False)
+
+
+class StoryAudienceMode(str, enum.Enum):
+    contacts = "contacts"                 # tous mes contacts
+    contacts_except = "contacts_except"   # tous mes contacts SAUF la liste
+    only = "only"                         # UNIQUEMENT la liste
+
+
+class StoryAudienceEntry(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Un contact listé pour la confidentialité des statuts d'un utilisateur.
+
+    Sens selon `owner.story_audience_mode` :
+      - `contacts_except` -> `target` est EXCLU,
+      - `only`            -> `target` est le SEUL autorisé (avec les autres
+        entrées),
+      - `contacts`        -> les entrées sont ignorées.
+    Évalué à l'affichage (liste courante), façon WhatsApp.
+    """
+
+    __tablename__ = "story_audience_entries"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "target_id", name="uq_story_audience"),
+    )
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    target_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )

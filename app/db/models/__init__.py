@@ -11,7 +11,13 @@ from app.db.models.device import Device, OneTimePreKey
 from app.db.models.group import Group, GroupMember, GroupMessage
 from app.db.models.message import Message, MessageReaction, MessageReceipt
 from app.db.models.push import DeviceToken
-from app.db.models.story import Story, StoryReaction, StoryView
+from app.db.models.story import (
+    Story,
+    StoryAudienceEntry,
+    StoryAudienceMode,
+    StoryReaction,
+    StoryView,
+)
 from app.db.models.user import User
 
 __all__ = [
@@ -37,6 +43,8 @@ __all__ = [
     "Story",
     "StoryView",
     "StoryReaction",
+    "StoryAudienceEntry",
+    "StoryAudienceMode",
     "Group",
     "GroupMember",
     "GroupMessage",
