@@ -94,6 +94,10 @@ async def _handle_client_event(user_id: str, data: dict) -> None:
     if kind == "typing":
         conv_id = data.get("conversation_id")
         state = data.get("state", "start")
+        # `activity` : 'text' (frappe) | 'audio' (enregistrement vocal)
+        activity = data.get("activity", "text")
+        if activity not in ("text", "audio"):
+            activity = "text"
         if not conv_id:
             return
         async with AsyncSessionLocal() as db:
@@ -111,6 +115,7 @@ async def _handle_client_event(user_id: str, data: dict) -> None:
                 "type": f"typing.{'start' if state == 'start' else 'stop'}",
                 "conversation_id": conv_id,
                 "user_id": user_id,
+                "activity": activity,
             },
         )
         return
