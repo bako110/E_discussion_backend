@@ -28,10 +28,13 @@ class UserMe(UserPublic):
     locale: str
     email_verified: bool
     phone_verified: bool
-    # parametres de confidentialite (visibles uniquement par soi)
+    # parametres de confidentialite (visibles uniquement par soi). Les modes
+    # 'everyone_except' / 'only' ont une liste par champ servie par
+    # GET /users/me/privacy.
     last_seen_privacy: str = "everyone"
     profile_photo_privacy: str = "everyone"
     about_privacy: str = "everyone"
+    online_privacy: str = "match_last_seen"
     # confidentialite des statuts (la liste est servie par GET /stories/audience)
     story_audience_mode: str = "contacts"
     read_receipts: bool = True
@@ -61,6 +64,28 @@ class UserUpdate(BaseModel):
     call_answer_on_speaker: bool | None = None
     call_low_data: bool | None = None
     call_block_unknown: bool | None = None
+
+
+class PrivacyFieldOut(BaseModel):
+    mode: str
+    contact_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class PrivacySettingsOut(BaseModel):
+    """Etat complet de la confidentialite du profil (mode + liste par champ)."""
+
+    online: PrivacyFieldOut
+    last_seen: PrivacyFieldOut
+    profile_photo: PrivacyFieldOut
+    about: PrivacyFieldOut
+
+
+class PrivacyFieldIn(BaseModel):
+    field: str = Field(..., pattern=r"^(online|last_seen|profile_photo|about)$")
+    mode: str = Field(
+        ..., pattern=r"^(everyone|contacts|nobody|everyone_except|only|match_last_seen)$"
+    )
+    contact_ids: list[uuid.UUID] = Field(default_factory=list, max_length=2000)
 
 
 class ContactSyncIn(BaseModel):

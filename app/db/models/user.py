@@ -38,15 +38,23 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # ── Confidentialite ─────────────────────────────────────────────────
-    # 'everyone' | 'contacts' | 'nobody' — qui voit quoi sur le profil public
+    # Mode de visibilite par champ. Valeurs supportees :
+    #   'everyone' | 'contacts' | 'nobody'            (heritage, encore acceptees)
+    #   'everyone_except' | 'only'                    (facon WhatsApp actuel :
+    #     + une liste de contacts dans `privacy_audience`, par champ)
     last_seen_privacy: Mapped[str] = mapped_column(
-        String(16), default="everyone", nullable=False
+        String(20), default="everyone", nullable=False
     )
     profile_photo_privacy: Mapped[str] = mapped_column(
-        String(16), default="everyone", nullable=False
+        String(20), default="everyone", nullable=False
     )
     about_privacy: Mapped[str] = mapped_column(
-        String(16), default="everyone", nullable=False
+        String(20), default="everyone", nullable=False
+    )
+    # "en ligne" : reglage a part entiere (WhatsApp actuel). Par defaut il suit
+    # la derniere connexion -> valeur speciale 'match_last_seen'.
+    online_privacy: Mapped[str] = mapped_column(
+        String(20), default="match_last_seen", nullable=False
     )
     # confidentialite des statuts (facon WhatsApp) :
     #   'contacts' | 'contacts_except' | 'only'  (+ table story_audience_entries)

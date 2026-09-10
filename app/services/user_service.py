@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import AppError, NotFoundError
 from app.db.models.block import UserBlock
 from app.db.models.contact import UserContact
+from app.db.models.privacy import PrivacyAudienceEntry
 from app.db.models.user import User
 from app.db.redis import filter_online, is_online
 from app.schemas.user import (
@@ -21,8 +22,22 @@ from app.schemas.user import (
 from app.utils.phone import to_e164
 
 
+PRIVACY_FIELDS = ("online", "last_seen", "profile_photo", "about")
+# modes acceptes par l'API (les 3 heritage restent valides pour retro-compat)
+PRIVACY_MODES = {
+    "everyone",
+    "contacts",
+    "nobody",
+    "everyone_except",
+    "only",
+    "match_last_seen",  # 'online' uniquement
+}
+
+
 def _visible(privacy: str, *, viewer_is_contact: bool, is_self: bool) -> bool:
-    """Regle de visibilite d'un champ selon le parametre de confidentialite."""
+    """Regle de visibilite d'un champ selon le parametre de confidentialite
+    HERITAGE ('everyone' | 'contacts' | 'nobody'). Pour les modes 'sauf' /
+    'uniquement', voir `PrivacyResolver`."""
     if is_self:
         return True
     if privacy == "nobody":
@@ -32,9 +47,103 @@ def _visible(privacy: str, *, viewer_is_contact: bool, is_self: bool) -> bool:
     return True  # 'everyone'
 
 
+async def _field_audience(
+    db: AsyncSession, owner_id: uuid.UUID
+) -> dict[str, set[uuid.UUID]]:
+    """Toutes les listes de confidentialite d'un utilisateur, par champ."""
+    rows = (
+        await db.execute(
+            select(PrivacyAudienceEntry.field, PrivacyAudienceEntry.target_id).where(
+                PrivacyAudienceEntry.owner_id == owner_id
+            )
+        )
+    ).all()
+    out: dict[str, set[uuid.UUID]] = {}
+    for field, target in rows:
+        out.setdefault(field, set()).add(target)
+    return out
+
+
+class PrivacyResolver:
+    """Resout la visibilite des 4 champs de profil de `owner` pour un lecteur
+    donne, en tenant compte des modes ('everyone' / 'contacts' / 'nobody' /
+    'everyone_except' / 'only' / 'match_last_seen') et des listes par champ.
+
+    Evalue a la lecture (liste courante), facon WhatsApp.
+    """
+
+    def __init__(
+        self,
+        owner: User,
+        *,
+        audience: dict[str, set[uuid.UUID]],
+        viewer_id: uuid.UUID | None,
+        viewer_is_contact: bool,
+        blocked: bool,
+    ) -> None:
+        self.owner = owner
+        self.audience = audience
+        self.viewer_id = viewer_id
+        self.viewer_is_contact = viewer_is_contact
+        self.blocked = blocked
+        self.is_self = viewer_id is not None and viewer_id == owner.id
+
+    @classmethod
+    async def load(
+        cls,
+        db: AsyncSession,
+        owner: User,
+        *,
+        viewer_id: uuid.UUID | None,
+        viewer_is_contact: bool,
+        blocked: bool = False,
+    ) -> "PrivacyResolver":
+        aud = (
+            {}
+            if (viewer_id is not None and viewer_id == owner.id)
+            else await _field_audience(db, owner.id)
+        )
+        return cls(
+            owner,
+            audience=aud,
+            viewer_id=viewer_id,
+            viewer_is_contact=viewer_is_contact,
+            blocked=blocked,
+        )
+
+    def _mode(self, field: str) -> str:
+        if field == "online":
+            return self.owner.online_privacy or "match_last_seen"
+        return getattr(self.owner, f"{field}_privacy", "everyone") or "everyone"
+
+    def visible(self, field: str) -> bool:
+        if self.is_self:
+            return True
+        if self.blocked:
+            return False  # un blocage masque tout
+
+        mode = self._mode(field)
+        if field == "online" and mode == "match_last_seen":
+            return self.visible("last_seen")
+
+        if mode == "nobody":
+            return False
+        if mode == "everyone":
+            return True
+        if mode == "contacts":
+            return self.viewer_is_contact
+        listed = self.audience.get(field, set())
+        if mode == "everyone_except":
+            return self.viewer_id not in listed
+        if mode == "only":
+            return self.viewer_id in listed
+        return True
+
+
 async def serialize_public(
     user: User,
     *,
+    db: AsyncSession | None = None,
     online: bool | None = None,
     viewer_id: uuid.UUID | None = None,
     viewer_is_contact: bool = True,
@@ -43,14 +152,17 @@ async def serialize_public(
     """Serialise le profil public.
 
     `viewer_id` / `viewer_is_contact` : applique les parametres de
-    confidentialite (derniere connexion, photo, a propos). Par defaut on
-    considere le lecteur comme un contact (cas des listes de conversations /
+    confidentialite (en ligne, derniere connexion, photo, a propos). Par
+    defaut on considere le lecteur comme un contact (listes de conversations /
     contacts) ; `GET /users/{id}` passe l'info reelle.
 
-    `blocked` : il y a un blocage entre le lecteur et `user` (dans un sens ou
-    l'autre). On masque TOUT ce qui touche a la presence sociale — photo, a
-    propos, derniere connexion, statut en ligne — comme WhatsApp. Le blocage
-    d'envoi de messages / d'appels est applique ailleurs (services dedies).
+    `db` : requis pour appliquer les modes 'sauf' / 'uniquement' (listes par
+    champ). Sans `db`, seul le mode heritage est evalue (suffisant pour les
+    listes internes ou le lecteur est un contact).
+
+    `blocked` : blocage entre le lecteur et `user` -> on masque TOUT (photo,
+    a propos, derniere connexion, statut en ligne). Le blocage d'envoi de
+    messages / d'appels est applique ailleurs.
     """
     data = UserPublic.model_validate(user)
     is_self = viewer_id is not None and viewer_id == user.id
@@ -62,18 +174,39 @@ async def serialize_public(
         data.is_online = False
         return data
 
-    if not _visible(user.last_seen_privacy, viewer_is_contact=viewer_is_contact, is_self=is_self):
+    if db is not None:
+        pr = await PrivacyResolver.load(
+            db,
+            user,
+            viewer_id=viewer_id,
+            viewer_is_contact=viewer_is_contact,
+            blocked=blocked,
+        )
+        show_last_seen = pr.visible("last_seen")
+        show_photo = pr.visible("profile_photo")
+        show_about = pr.visible("about")
+        show_online = pr.visible("online")
+    else:
+        show_last_seen = _visible(
+            user.last_seen_privacy, viewer_is_contact=viewer_is_contact, is_self=is_self
+        )
+        show_photo = _visible(
+            user.profile_photo_privacy, viewer_is_contact=viewer_is_contact, is_self=is_self
+        )
+        show_about = _visible(
+            user.about_privacy, viewer_is_contact=viewer_is_contact, is_self=is_self
+        )
+        # heritage : "en ligne" suit la derniere connexion
+        show_online = show_last_seen
+
+    if not show_last_seen:
         data.last_seen_at = None
-    if not _visible(user.profile_photo_privacy, viewer_is_contact=viewer_is_contact, is_self=is_self):
+    if not show_photo:
         data.avatar_url = None
-    if not _visible(user.about_privacy, viewer_is_contact=viewer_is_contact, is_self=is_self):
+    if not show_about:
         data.about = None
 
-    # presence en ligne : masquee si la "derniere connexion" l'est
-    show_presence = _visible(
-        user.last_seen_privacy, viewer_is_contact=viewer_is_contact, is_self=is_self
-    )
-    if show_presence:
+    if show_online:
         data.is_online = online if online is not None else await is_online(str(user.id))
     else:
         data.is_online = False
@@ -222,6 +355,92 @@ async def list_contacts(db: AsyncSession, me: User, limit: int = 200) -> list[Us
     ).scalars().all()
     online = await filter_online([str(r.id) for r in rows])
     return [await serialize_public(r, online=str(r.id) in online) for r in rows]
+
+
+# ── Confidentialite du profil (mode + liste par champ) ────────────────────
+async def _contact_id_set(db: AsyncSession, me_id: uuid.UUID) -> set[uuid.UUID]:
+    """Contacts de `me` (conversations + repertoire), sans les bloques."""
+    from app.db.models.conversation import Conversation  # local: cycle
+
+    rows = (
+        await db.execute(
+            select(Conversation.user_a_id, Conversation.user_b_id).where(
+                or_(Conversation.user_a_id == me_id, Conversation.user_b_id == me_id)
+            )
+        )
+    ).all()
+    ids: set[uuid.UUID] = set()
+    for a, b in rows:
+        ids.add(b if a == me_id else a)
+    rc = (
+        await db.execute(
+            select(UserContact.owner_id, UserContact.matched_user_id).where(
+                or_(UserContact.owner_id == me_id, UserContact.matched_user_id == me_id)
+            )
+        )
+    ).all()
+    for owner, matched in rc:
+        if matched is None:
+            continue
+        ids.add(matched if owner == me_id else owner)
+    return ids - await blocked_ids(db, me_id)
+
+
+async def get_privacy(db: AsyncSession, me: User) -> dict:
+    aud = await _field_audience(db, me.id)
+
+    def field(name: str, mode: str) -> dict:
+        return {
+            "mode": mode,
+            "contact_ids": [str(x) for x in aud.get(name, set())],
+        }
+
+    return {
+        "online": field("online", me.online_privacy or "match_last_seen"),
+        "last_seen": field("last_seen", me.last_seen_privacy or "everyone"),
+        "profile_photo": field(
+            "profile_photo", me.profile_photo_privacy or "everyone"
+        ),
+        "about": field("about", me.about_privacy or "everyone"),
+    }
+
+
+async def set_privacy_field(
+    db: AsyncSession, me: User, field: str, mode: str, contact_ids: list[uuid.UUID]
+) -> dict:
+    if field not in PRIVACY_FIELDS:
+        raise AppError("privacy.bad_field", status_code=400, code="bad_field")
+    valid = PRIVACY_MODES if field == "online" else PRIVACY_MODES - {"match_last_seen"}
+    if mode not in valid:
+        raise AppError("privacy.bad_mode", status_code=400, code="bad_mode")
+
+    if field == "online":
+        me.online_privacy = mode
+    else:
+        setattr(me, f"{field}_privacy", mode)
+
+    # liste : uniquement pertinente pour 'everyone_except' / 'only'
+    wanted: set[uuid.UUID] = set()
+    if mode in ("everyone_except", "only"):
+        contacts = await _contact_id_set(db, me.id)
+        wanted = {c for c in contact_ids if c in contacts}
+
+    current = (await _field_audience(db, me.id)).get(field, set())
+    to_del = current - wanted
+    if to_del:
+        await db.execute(
+            PrivacyAudienceEntry.__table__.delete().where(
+                PrivacyAudienceEntry.owner_id == me.id,
+                PrivacyAudienceEntry.field == field,
+                PrivacyAudienceEntry.target_id.in_(to_del),
+            )
+        )
+    for tid in wanted - current:
+        db.add(
+            PrivacyAudienceEntry(owner_id=me.id, field=field, target_id=tid)
+        )
+    await db.flush()
+    return {"mode": mode, "contact_ids": [str(x) for x in wanted]}
 
 
 async def are_contacts(db: AsyncSession, a_id: uuid.UUID, b_id: uuid.UUID) -> bool:

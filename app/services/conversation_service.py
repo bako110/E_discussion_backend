@@ -214,7 +214,7 @@ async def list_summaries(db: AsyncSession, me: User) -> list[ConversationSummary
             ConversationSummary(
                 id=c.id,
                 partner=await serialize_public(
-                    partner, viewer_id=me.id, blocked=pid in blocked
+                    partner, db=db, viewer_id=me.id, blocked=pid in blocked
                 ),
                 last_message=(None if (m and m.encrypted) else (m.body if m else None)),
                 last_message_type=(m.type if m else None),
@@ -237,7 +237,11 @@ async def detail(db: AsyncSession, me: User, conversation_id: uuid.UUID) -> Conv
     return ConversationDetail(
         id=conv.id,
         partner=await serialize_public(
-            partner, viewer_id=me.id, viewer_is_contact=is_contact, blocked=is_blocked
+            partner,
+            db=db,
+            viewer_id=me.id,
+            viewer_is_contact=is_contact,
+            blocked=is_blocked,
         ),
         muted=await is_muted(db, me.id, conv.id),
         request_status=await request_status(db, me.id, pid),

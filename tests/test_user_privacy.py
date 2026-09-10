@@ -227,3 +227,69 @@ async def test_invalid_privacy_level_rejected(client, _capture_otp):
         "/api/v1/users/me", json={"last_seen_privacy": "friends"}, headers=h
     )
     assert r.status_code == 422
+
+
+async def test_privacy_three_modes_online_and_except_only(client, _capture_otp):
+    """Modes 'everyone_except' / 'only' avec liste par champ + reglage 'en
+    ligne' independant de la derniere connexion."""
+    alice_token, alice_id = await _register(client, _capture_otp, "+33612345671")
+    bob_token, bob_id = await _register(client, _capture_otp, "+33612345672")
+    carol_token, carol_id = await _register(client, _capture_otp, "+33612345673")
+    ah = {"Authorization": f"Bearer {alice_token}"}
+    bh = {"Authorization": f"Bearer {bob_token}"}
+    ch = {"Authorization": f"Bearer {carol_token}"}
+
+    await client.patch(
+        "/api/v1/users/me",
+        json={"avatar_url": "https://x/a.jpg", "about": "hey"},
+        headers=ah,
+    )
+    # Bob et Carol deviennent contacts d'Alice (conversations)
+    await client.post("/api/v1/conversations", json={"partner_id": bob_id}, headers=ah)
+    await client.post("/api/v1/conversations", json={"partner_id": carol_id}, headers=ah)
+
+    # etat par defaut
+    r = await client.get("/api/v1/users/me/privacy", headers=ah)
+    p = r.json()
+    assert p["online"]["mode"] == "match_last_seen"
+    assert p["profile_photo"]["mode"] == "everyone"
+
+    # PHOTO : tout le monde SAUF Bob
+    r = await client.put(
+        "/api/v1/users/me/privacy",
+        json={"field": "profile_photo", "mode": "everyone_except", "contact_ids": [bob_id]},
+        headers=ah,
+    )
+    assert r.status_code == 200
+    assert r.json()["contact_ids"] == [bob_id]
+
+    assert (await client.get(f"/api/v1/users/{alice_id}", headers=bh)).json()["avatar_url"] is None
+    assert (await client.get(f"/api/v1/users/{alice_id}", headers=ch)).json()["avatar_url"] == "https://x/a.jpg"
+
+    # ABOUT : UNIQUEMENT Carol
+    await client.put(
+        "/api/v1/users/me/privacy",
+        json={"field": "about", "mode": "only", "contact_ids": [carol_id]},
+        headers=ah,
+    )
+    assert (await client.get(f"/api/v1/users/{alice_id}", headers=bh)).json()["about"] is None
+    assert (await client.get(f"/api/v1/users/{alice_id}", headers=ch)).json()["about"] == "hey"
+
+    # EN LIGNE : reglage propre -> 'nobody' meme si derniere connexion = everyone
+    await client.put(
+        "/api/v1/users/me/privacy",
+        json={"field": "online", "mode": "nobody", "contact_ids": []},
+        headers=ah,
+    )
+    assert (await client.get(f"/api/v1/users/{alice_id}", headers=ch)).json()["is_online"] is False
+    # la derniere connexion, elle, reste visible (everyone par defaut)
+    # (last_seen_at peut etre null si jamais deconnecte -> on verifie juste le champ present)
+    assert "last_seen_at" in (await client.get(f"/api/v1/users/{alice_id}", headers=ch)).json()
+
+    # mode reserve a 'online' refuse sur un autre champ -> 400
+    r = await client.put(
+        "/api/v1/users/me/privacy",
+        json={"field": "about", "mode": "match_last_seen", "contact_ids": []},
+        headers=ah,
+    )
+    assert r.status_code == 400
