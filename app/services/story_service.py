@@ -33,6 +33,9 @@ STORY_TTL_HOURS = 24
 
 # ── helpers ────────────────────────────────────────────────────────────────
 async def _contact_ids(db: AsyncSession, me_id: uuid.UUID) -> set[uuid.UUID]:
+    """Contacts de `me` (personnes avec une conversation), SANS les personnes
+    bloquees (dans un sens ou l'autre) : un blocage coupe entierement le lien
+    social — stories comprises."""
     rows = (
         await db.execute(
             select(Conversation.user_a_id, Conversation.user_b_id).where(
@@ -43,7 +46,8 @@ async def _contact_ids(db: AsyncSession, me_id: uuid.UUID) -> set[uuid.UUID]:
     ids: set[uuid.UUID] = set()
     for a, b in rows:
         ids.add(b if a == me_id else a)
-    return ids
+    blocked = await user_service.blocked_ids(db, me_id)
+    return ids - blocked
 
 
 async def _audience_list(db: AsyncSession, owner_id: uuid.UUID) -> set[uuid.UUID]:

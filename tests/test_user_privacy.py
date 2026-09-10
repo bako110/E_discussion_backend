@@ -157,6 +157,55 @@ async def test_blocked_users_list(client, _capture_otp):
     assert r.json() == []
 
 
+async def test_block_hides_profile_and_blocks_contact(client, _capture_otp):
+    """Bloquer quelqu'un = il ne voit plus ma photo / mes infos / ma presence,
+    et ne peut plus me contacter (messages)."""
+    alice_token, alice_id = await _register(client, _capture_otp, "+33687777777")
+    bob_token, bob_id = await _register(client, _capture_otp, "+33688888888")
+    ah = {"Authorization": f"Bearer {alice_token}"}
+    bh = {"Authorization": f"Bearer {bob_token}"}
+
+    # Alice a une photo + un about, visibilite 'everyone'
+    await client.patch(
+        "/api/v1/users/me",
+        json={"avatar_url": "https://x/a.jpg", "about": "hey"},
+        headers=ah,
+    )
+    # Bob voit tout AVANT le blocage
+    r = await client.get(f"/api/v1/users/{alice_id}", headers=bh)
+    assert r.json()["avatar_url"] == "https://x/a.jpg"
+    assert r.json()["about"] == "hey"
+
+    # Alice bloque Bob
+    r = await client.post(f"/api/v1/users/{bob_id}/block", headers=ah)
+    assert r.status_code == 200
+
+    # Bob ne voit plus la photo / about / presence d'Alice
+    r = await client.get(f"/api/v1/users/{alice_id}", headers=bh)
+    body = r.json()
+    assert body["avatar_url"] is None
+    assert body["about"] is None
+    assert body["last_seen_at"] is None
+    assert body["is_online"] is False
+
+    # Bob ne peut plus creer de conversation / envoyer un message a Alice
+    r = await client.post(
+        "/api/v1/conversations", json={"partner_id": alice_id}, headers=bh
+    )
+    assert r.status_code == 403
+
+    # Alice non plus dans l'autre sens (le blocage coupe les deux cotes)
+    r = await client.post(
+        "/api/v1/conversations", json={"partner_id": bob_id}, headers=ah
+    )
+    assert r.status_code == 403
+
+    # Apres deblocage, Bob revoit le profil
+    await client.delete(f"/api/v1/users/{bob_id}/block", headers=ah)
+    r = await client.get(f"/api/v1/users/{alice_id}", headers=bh)
+    assert r.json()["avatar_url"] == "https://x/a.jpg"
+
+
 async def test_read_receipts_toggle_persists(client, _capture_otp):
     token, _ = await _register(client, _capture_otp, "+33685555555")
     h = {"Authorization": f"Bearer {token}"}

@@ -165,6 +165,7 @@ async def list_summaries(db: AsyncSession, me: User) -> list[ConversationSummary
             await db.execute(select(User).where(User.id.in_(partner_ids)))
         ).scalars().all()
     }
+    blocked = await user_service.blocked_ids(db, me.id)
 
     # dernier message par conversation
     last_msgs: dict[uuid.UUID, Message] = {}
@@ -212,7 +213,9 @@ async def list_summaries(db: AsyncSession, me: User) -> list[ConversationSummary
         out.append(
             ConversationSummary(
                 id=c.id,
-                partner=await serialize_public(partner),
+                partner=await serialize_public(
+                    partner, viewer_id=me.id, blocked=pid in blocked
+                ),
                 last_message=(None if (m and m.encrypted) else (m.body if m else None)),
                 last_message_type=(m.type if m else None),
                 last_message_at=c.last_message_at,
@@ -229,9 +232,13 @@ async def detail(db: AsyncSession, me: User, conversation_id: uuid.UUID) -> Conv
     conv = await get_owned(db, me, conversation_id)
     pid = await _partner_of(conv, me.id)
     partner = await user_service.get_user_or_404(db, pid)
+    is_blocked = await user_service.is_blocked_between(db, me.id, pid)
+    is_contact = await user_service.are_contacts(db, me.id, pid)
     return ConversationDetail(
         id=conv.id,
-        partner=await serialize_public(partner),
+        partner=await serialize_public(
+            partner, viewer_id=me.id, viewer_is_contact=is_contact, blocked=is_blocked
+        ),
         muted=await is_muted(db, me.id, conv.id),
         request_status=await request_status(db, me.id, pid),
     )

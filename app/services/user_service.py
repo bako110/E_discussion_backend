@@ -38,6 +38,7 @@ async def serialize_public(
     online: bool | None = None,
     viewer_id: uuid.UUID | None = None,
     viewer_is_contact: bool = True,
+    blocked: bool = False,
 ) -> UserPublic:
     """Serialise le profil public.
 
@@ -45,9 +46,21 @@ async def serialize_public(
     confidentialite (derniere connexion, photo, a propos). Par defaut on
     considere le lecteur comme un contact (cas des listes de conversations /
     contacts) ; `GET /users/{id}` passe l'info reelle.
+
+    `blocked` : il y a un blocage entre le lecteur et `user` (dans un sens ou
+    l'autre). On masque TOUT ce qui touche a la presence sociale — photo, a
+    propos, derniere connexion, statut en ligne — comme WhatsApp. Le blocage
+    d'envoi de messages / d'appels est applique ailleurs (services dedies).
     """
     data = UserPublic.model_validate(user)
     is_self = viewer_id is not None and viewer_id == user.id
+
+    if blocked and not is_self:
+        data.avatar_url = None
+        data.about = None
+        data.last_seen_at = None
+        data.is_online = False
+        return data
 
     if not _visible(user.last_seen_privacy, viewer_is_contact=viewer_is_contact, is_self=is_self):
         data.last_seen_at = None
@@ -252,7 +265,9 @@ async def list_blocked(db: AsyncSession, me: User) -> list[UserPublic]:
 
 
 # ── Blocage ────────────────────────────────────────────────────────────────
-async def _blocked_ids(db: AsyncSession, user_id: uuid.UUID) -> set[uuid.UUID]:
+async def blocked_ids(db: AsyncSession, user_id: uuid.UUID) -> set[uuid.UUID]:
+    """Tous les ids en relation de blocage avec `user_id` (dans un sens ou
+    l'autre) — a exclure de toute vue sociale (contacts, stories, presence)."""
     rows = await db.execute(
         select(UserBlock.blocked_id, UserBlock.blocker_id).where(
             or_(UserBlock.blocker_id == user_id, UserBlock.blocked_id == user_id)
@@ -262,6 +277,10 @@ async def _blocked_ids(db: AsyncSession, user_id: uuid.UUID) -> set[uuid.UUID]:
     for blocked_id, blocker_id in rows.all():
         ids.add(blocked_id if blocker_id == user_id else blocker_id)
     return ids
+
+
+# alias historique (compat interne)
+_blocked_ids = blocked_ids
 
 
 async def is_blocked_between(db: AsyncSession, a: uuid.UUID, b: uuid.UUID) -> bool:

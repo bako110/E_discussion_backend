@@ -35,8 +35,12 @@ async def blocked(current_user: CurrentUser, db: DbSession):
 async def get_user(user_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
     user = await user_service.get_user_or_404(db, user_id)
     is_contact = await user_service.are_contacts(db, current_user.id, user.id)
+    is_blocked = await user_service.is_blocked_between(db, current_user.id, user.id)
     return await serialize_public(
-        user, viewer_id=current_user.id, viewer_is_contact=is_contact
+        user,
+        viewer_id=current_user.id,
+        viewer_is_contact=is_contact,
+        blocked=is_blocked,
     )
 
 

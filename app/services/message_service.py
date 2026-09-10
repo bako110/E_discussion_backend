@@ -36,7 +36,13 @@ async def _partner_id(conv: Conversation, me_id: uuid.UUID) -> uuid.UUID:
     return conv.user_b_id if conv.user_a_id == me_id else conv.user_a_id
 
 
-async def _serialize(db: AsyncSession, m: Message, *, viewer_id: uuid.UUID) -> MessageOut:
+async def _serialize(
+    db: AsyncSession,
+    m: Message,
+    *,
+    viewer_id: uuid.UUID,
+    viewer_read_receipts: bool = True,
+) -> MessageOut:
     reply = None
     if m.reply_to_id:
         rt = await db.get(Message, m.reply_to_id)
@@ -65,7 +71,9 @@ async def _serialize(db: AsyncSession, m: Message, *, viewer_id: uuid.UUID) -> M
         )
         states = {s for (s,) in rc.all()}
         delivered = ReceiptState.delivered in states or ReceiptState.read in states
-        read = ReceiptState.read in states
+        # reciprocite WhatsApp : si J'AI desactive les accuses de lecture, je ne
+        # vois pas non plus quand l'autre a lu mes messages.
+        read = viewer_read_receipts and (ReceiptState.read in states)
 
     out = MessageOut.model_validate(m)
     out.reply_to = reply
@@ -103,7 +111,9 @@ async def send(
         )
         dup = existing.scalar_one_or_none()
         if dup is not None:
-            return await _serialize(db, dup, viewer_id=me.id)
+            return await _serialize(
+                db, dup, viewer_id=me.id, viewer_read_receipts=me.read_receipts
+            )
 
     msg = Message(
         conversation_id=conv.id,
@@ -147,7 +157,9 @@ async def send(
             },
         )
 
-    return await _serialize(db, msg, viewer_id=me.id)
+    return await _serialize(
+        db, msg, viewer_id=me.id, viewer_read_receipts=me.read_receipts
+    )
 
 
 async def history(
@@ -173,7 +185,12 @@ async def history(
     else:
         stmt = stmt.order_by(desc(Message.created_at)).offset(offset).limit(limit)
     rows = list((await db.execute(stmt)).scalars().all())
-    return [await _serialize(db, m, viewer_id=me.id) for m in rows]
+    return [
+        await _serialize(
+            db, m, viewer_id=me.id, viewer_read_receipts=me.read_receipts
+        )
+        for m in rows
+    ]
 
 
 async def mark_read(db: AsyncSession, me: User, conversation_id: uuid.UUID) -> int:
@@ -270,7 +287,9 @@ async def edit(db: AsyncSession, me: User, message_id: uuid.UUID, body: str) -> 
         str(partner_id),
         {"type": "message.edited", "message": (await _serialize(db, msg, viewer_id=partner_id)).model_dump(mode="json")},
     )
-    return await _serialize(db, msg, viewer_id=me.id)
+    return await _serialize(
+        db, msg, viewer_id=me.id, viewer_read_receipts=me.read_receipts
+    )
 
 
 async def delete(db: AsyncSession, me: User, message_id: uuid.UUID) -> None:
