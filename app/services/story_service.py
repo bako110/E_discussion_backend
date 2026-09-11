@@ -123,9 +123,21 @@ def _active_filter():
 
 # ── publication ────────────────────────────────────────────────────────────
 async def create_story(db: AsyncSession, me: User, data: StoryCreate) -> StoryOut:
+    # idempotence offline : un rejeu de l'outbox (retry apres reconnexion,
+    # meme client_id) renvoie la story deja creee au lieu d'en publier une 2e.
+    if data.client_id:
+        existing = await db.scalar(
+            select(Story).where(
+                Story.author_id == me.id, Story.client_id == data.client_id
+            )
+        )
+        if existing is not None:
+            return await _serialize(db, existing, me_id=me.id)
+
     now = datetime.now(UTC)
     story = Story(
         author_id=me.id,
+        client_id=data.client_id,
         media_type=data.media_type,
         media_url=data.media_url,
         caption=data.caption,

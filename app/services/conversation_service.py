@@ -1,7 +1,9 @@
-"""Conversations 1-to-1 — creation/recuperation, demandes, sourdine, resume."""
+"""Conversations 1-to-1 — creation/recuperation, demandes, sourdine, resume,
+suppression cote utilisateur (masquage)."""
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import AppError, ForbiddenError, NotFoundError
 from app.db.models.conversation import (
     Conversation,
+    ConversationHide,
     ConversationMute,
     ConversationRequest,
     RequestStatus,
@@ -144,14 +147,71 @@ async def is_muted(db: AsyncSession, user_id: uuid.UUID, conversation_id: uuid.U
     return res.first() is not None
 
 
+async def hide(db: AsyncSession, me: User, conversation_id: uuid.UUID) -> None:
+    """« Supprimer la conversation » — masquee pour MOI seulement, jamais
+    pour l'autre. Idempotent : ecrase `hidden_at` si deja masquee (utile si
+    de nouveaux messages sont arrives entre-temps -> on redemande le masquage
+    a partir de maintenant)."""
+    await get_owned(db, me, conversation_id)
+    res = await db.execute(
+        select(ConversationHide).where(
+            ConversationHide.user_id == me.id,
+            ConversationHide.conversation_id == conversation_id,
+        )
+    )
+    row = res.scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    if row is None:
+        db.add(ConversationHide(user_id=me.id, conversation_id=conversation_id, hidden_at=now))
+    else:
+        row.hidden_at = now
+    await db.flush()
+
+
+async def unhide(db: AsyncSession, me: User, conversation_id: uuid.UUID) -> None:
+    """Reaffiche manuellement (rarement appele : `list_summaries` reaffiche
+    deja automatiquement des qu'un nouveau message arrive)."""
+    res = await db.execute(
+        select(ConversationHide).where(
+            ConversationHide.user_id == me.id,
+            ConversationHide.conversation_id == conversation_id,
+        )
+    )
+    row = res.scalar_one_or_none()
+    if row is not None:
+        await db.delete(row)
+        await db.flush()
+
+
 async def list_summaries(db: AsyncSession, me: User) -> list[ConversationSummary]:
     res = await db.execute(
         select(Conversation).where(
             or_(Conversation.user_a_id == me.id, Conversation.user_b_id == me.id)
         )
     )
+    all_convs = res.scalars().all()
+    if not all_convs:
+        return []
+
+    # « supprimees » (masquees pour MOI) : exclues tant qu'aucun message plus
+    # recent que `hidden_at` n'est arrive — sinon elles reapparaissent
+    # automatiquement (comme WhatsApp : quelqu'un vous reecrit -> le fil revient).
+    hides_res = await db.execute(
+        select(ConversationHide.conversation_id, ConversationHide.hidden_at).where(
+            ConversationHide.user_id == me.id,
+            ConversationHide.conversation_id.in_([c.id for c in all_convs]),
+        )
+    )
+    hidden_at_by_conv = {row[0]: row[1] for row in hides_res.all()}
+
+    def _is_visible(c: Conversation) -> bool:
+        hidden_at = hidden_at_by_conv.get(c.id)
+        if hidden_at is None:
+            return True
+        return c.last_message_at is not None and c.last_message_at > hidden_at
+
     convs = sorted(
-        res.scalars().all(),
+        (c for c in all_convs if _is_visible(c)),
         key=lambda c: c.last_message_at or c.created_at,
         reverse=True,
     )

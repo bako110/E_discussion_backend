@@ -23,6 +23,9 @@ class StoryCreate(BaseModel):
     audio_url: str | None = Field(None, max_length=1024)
     audio_name: str | None = Field(None, max_length=120)
     audience: str = Field("everyone", pattern="^(everyone|contacts)$")
+    # idempotence offline (rejeu outbox) : si une story avec ce client_id
+    # existe deja pour l'auteur, on la renvoie au lieu d'en creer une 2e.
+    client_id: str | None = Field(None, max_length=64)
 
 
 class StoryUpdate(BaseModel):

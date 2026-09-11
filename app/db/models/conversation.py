@@ -96,3 +96,31 @@ class ConversationMute(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         nullable=False,
     )
     muted_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # null = indefini
+
+
+class ConversationHide(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """« Supprimer la conversation » façon WhatsApp : masquee SEULEMENT pour
+    l'utilisateur qui a supprime, jamais pour l'autre. L'historique n'est pas
+    efface (voir `clear_history` pour ca). Reapparait automatiquement des
+    qu'un nouveau message arrive APRES `hidden_at` (voir list_summaries)."""
+
+    __tablename__ = "conversation_hides"
+    __table_args__ = (
+        UniqueConstraint("user_id", "conversation_id", name="uq_hide_user_conv"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    hidden_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )

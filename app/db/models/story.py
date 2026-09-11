@@ -12,7 +12,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -29,6 +29,11 @@ class StoryMediaType(str, enum.Enum):
 
 class Story(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "stories"
+    __table_args__ = (
+        # idempotence offline : un rejeu de l'outbox (retry apres reconnexion)
+        # avec le meme client_id ne cree pas de doublon.
+        Index("ix_stories_author_client", "author_id", "client_id", unique=True),
+    )
 
     author_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
@@ -36,6 +41,9 @@ class Story(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         index=True,
         nullable=False,
     )
+    # id genere cote client (outbox) — permet de rejouer une publication
+    # hors-ligne sans creer de doublon si le POST avait deja abouti.
+    client_id: Mapped[str | None] = mapped_column(String(64))
 
     media_type: Mapped[StoryMediaType] = mapped_column(
         Enum(StoryMediaType), default=StoryMediaType.text, nullable=False

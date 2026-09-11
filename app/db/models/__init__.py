@@ -6,7 +6,12 @@ from app.db.models.auth import OtpChallenge, RefreshToken
 from app.db.models.block import UserBlock
 from app.db.models.call import CallDirection, CallLog, CallStatus, CallType
 from app.db.models.contact import UserContact
-from app.db.models.conversation import Conversation, ConversationMute, ConversationRequest
+from app.db.models.conversation import (
+    Conversation,
+    ConversationHide,
+    ConversationMute,
+    ConversationRequest,
+)
 from app.db.models.device import Device, OneTimePreKey
 from app.db.models.group import Group, GroupJoinRequest, GroupMember, GroupMessage
 from app.db.models.message import Message, MessageReaction, MessageReceipt
@@ -33,6 +38,7 @@ __all__ = [
     "Conversation",
     "ConversationRequest",
     "ConversationMute",
+    "ConversationHide",
     "Message",
     "MessageReaction",
     "MessageReceipt",

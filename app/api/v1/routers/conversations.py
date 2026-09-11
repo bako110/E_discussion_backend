@@ -63,6 +63,25 @@ async def unmute(conversation_id: uuid.UUID, current_user: CurrentUser, db: DbSe
     return Message(message="unmuted")
 
 
+@router.post("/{conversation_id}/hide", response_model=Message)
+async def hide_conversation(
+    conversation_id: uuid.UUID, current_user: CurrentUser, db: DbSession
+):
+    """« Supprimer la conversation » façon WhatsApp : la retire de MA liste
+    uniquement (l'autre garde la sienne, l'historique n'est pas effacé).
+    Réapparaît automatiquement dès qu'un nouveau message arrive."""
+    await conversation_service.hide(db, current_user, conversation_id)
+    return Message(message="hidden")
+
+
+@router.delete("/{conversation_id}/hide", response_model=Message)
+async def unhide_conversation(
+    conversation_id: uuid.UUID, current_user: CurrentUser, db: DbSession
+):
+    await conversation_service.unhide(db, current_user, conversation_id)
+    return Message(message="unhidden")
+
+
 # ── Messages d'une conversation ────────────────────────────────────────────
 @router.get("/{conversation_id}/messages", response_model=list[MessageOut])
 async def get_messages(
