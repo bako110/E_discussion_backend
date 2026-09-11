@@ -71,7 +71,10 @@ class PhoneVerifyIn(BaseModel):
 # ── OTP generique (e-mail ou telephone) — conserve pour la liaison ────────
 class SendOtpIn(BaseModel):
     identifier: str = Field(..., description="e-mail ou numero E.164")
-    purpose: str = Field("register", pattern=r"^(register|login|link_phone|link_email|reset_password)$")
+    purpose: str = Field(
+        "register",
+        pattern=r"^(register|login|link_phone|link_email|reset_password|account_delete)$",
+    )
 
 
 class VerifyOtpIn(BaseModel):
@@ -86,9 +89,17 @@ class RefreshIn(BaseModel):
 
 class LinkPhoneIn(BaseModel):
     phone: str
-    code: str
+    code: str = Field(..., min_length=4, max_length=8)
 
 
 class LinkEmailIn(BaseModel):
     email: EmailStr
-    code: str
+    code: str = Field(..., min_length=4, max_length=8)
+
+
+class DeleteAccountIn(BaseModel):
+    """Confirmation OTP requise avant suppression definitive du compte —
+    demandee au prealable via POST /auth/otp/send (purpose=account_delete)
+    sur le telephone/e-mail deja lie au compte courant."""
+
+    code: str = Field(..., min_length=4, max_length=8)

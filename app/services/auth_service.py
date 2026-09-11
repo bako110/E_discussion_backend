@@ -285,10 +285,22 @@ async def link_email(db: AsyncSession, user: User, *, email: str, code: str, loc
 
 
 # ── suppression de compte ─────────────────────────────────────────────────
-async def delete_account(db: AsyncSession, user: User) -> None:
+async def delete_account(db: AsyncSession, user: User, *, otp_code: str, locale: str) -> None:
     """Supprime definitivement le compte. Toutes les donnees liees (messages,
     stories, groupes crees, cles E2E, contacts...) tombent via `ON DELETE
-    CASCADE`. Irreversible."""
+    CASCADE`. Irreversible.
+
+    Exige un OTP valide (purpose=account_delete) prealablement envoye par
+    POST /auth/otp/send sur le telephone/e-mail deja lie au compte — sans ca,
+    n'importe quel appel accidentel/automatise avec un token d'acces valide
+    suffisait a supprimer le compte sans confirmation."""
+    identifier = user.phone or user.email
+    if not identifier:
+        raise NotFoundError("auth.no_identifier", code="no_identifier")
+    await otp_service.verify_otp(
+        identifier=identifier, purpose="account_delete", code=otp_code, locale=locale
+    )
+
     # revoque tous les refresh tokens d'abord (sessions actives coupees)
     rows = (
         await db.execute(

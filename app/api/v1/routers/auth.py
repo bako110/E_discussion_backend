@@ -6,6 +6,7 @@ from fastapi import APIRouter, Header, status
 from app.api.deps import CurrentUser, DbSession, Locale
 from app.schemas.auth import (
     AuthResult,
+    DeleteAccountIn,
     LinkEmailIn,
     LinkPhoneIn,
     LoginIn,
@@ -147,17 +148,22 @@ async def me(current_user: CurrentUser):
     return await serialize_me(current_user)
 
 
-@router.get("/me/export")
+@router.get("/me/export", response_model=dict[str, object])
 async def export_my_data(current_user: CurrentUser, db: DbSession):
     """Archive JSON de toutes mes donnees (portabilite / RGPD)."""
     return await account_export_service.build_export(db, current_user)
 
 
 @router.delete("/me", response_model=Message, status_code=status.HTTP_200_OK)
-async def delete_my_account(current_user: CurrentUser, db: DbSession):
+async def delete_my_account(
+    body: DeleteAccountIn, current_user: CurrentUser, db: DbSession, locale: Locale
+):
     """Supprime DEFINITIVEMENT le compte et toutes les donnees liees.
-    Irreversible — le client doit demander une double confirmation."""
-    await auth_service.delete_account(db, current_user)
+    Irreversible. Exige un code OTP valide (envoye au prealable via
+    POST /auth/otp/send avec purpose=account_delete sur le telephone/e-mail
+    deja lie au compte) — evite qu'un appel accidentel ou automatise avec un
+    token d'acces valide suffise a supprimer le compte sans confirmation."""
+    await auth_service.delete_account(db, current_user, otp_code=body.code, locale=locale)
     return Message(message="account_deleted")
 
 

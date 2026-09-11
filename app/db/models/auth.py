@@ -43,6 +43,8 @@ class OtpPurpose(str, enum.Enum):
     link_phone = "link_phone"
     link_email = "link_email"
     reset_password = "reset_password"
+    # confirmation avant suppression definitive du compte (DELETE /auth/me)
+    account_delete = "account_delete"
 
 
 class OtpChallenge(Base, UUIDPrimaryKeyMixin, TimestampMixin):

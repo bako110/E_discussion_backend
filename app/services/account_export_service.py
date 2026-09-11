@@ -38,10 +38,19 @@ async def build_export(db: AsyncSession, user: User) -> dict:
         "locale": user.locale,
         "created_at": _iso(user.created_at),
         "privacy": {
+            "online": user.online_privacy,
             "last_seen": user.last_seen_privacy,
             "profile_photo": user.profile_photo_privacy,
             "about": user.about_privacy,
             "read_receipts": user.read_receipts,
+            "story_audience_mode": user.story_audience_mode,
+        },
+        "call_preferences": {
+            "ringtone": user.call_ringtone,
+            "vibrate": user.call_vibrate,
+            "answer_on_speaker": user.call_answer_on_speaker,
+            "low_data": user.call_low_data,
+            "block_unknown": user.call_block_unknown,
         },
     }
 
