@@ -8,6 +8,12 @@ from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUser, DbSession, PageParams
 from app.db.models.group import GroupKind
+from app.schemas.channel_live import (
+    ChannelLiveJoinOut,
+    ChannelLiveOut,
+    ChannelLiveStartIn,
+    ChannelLiveStartOut,
+)
 from app.schemas.common import Message
 from app.schemas.group import (
     AddMembersIn,
@@ -24,7 +30,7 @@ from app.schemas.group import (
     JoinIn,
     SetRoleIn,
 )
-from app.services import group_service
+from app.services import channel_live_service, group_service
 
 router = APIRouter()
 
@@ -54,6 +60,13 @@ async def preview(
 @router.post("/join", response_model=GroupOut)
 async def join(body: JoinIn, current_user: CurrentUser, db: DbSession):
     return await group_service.join_by_code(db, current_user, body.invite_code)
+
+
+@router.get("/live", response_model=list[ChannelLiveOut])
+async def list_live_channels(current_user: CurrentUser, db: DbSession):
+    """Chaînes auxquelles je suis abonné et qui diffusent EN DIRECT en ce
+    moment — alimente la section « Chaînes en direct » de l'écran Stories."""
+    return await channel_live_service.list_live(db, current_user)
 
 
 @router.get("/{group_id}", response_model=GroupOut)
@@ -192,3 +205,38 @@ async def post_message(
 async def mark_read(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
     await group_service.mark_read(db, current_user, group_id)
     return Message(message="ok")
+
+
+# ── diffusion en direct (chaînes) ─────────────────────────────────────────
+@router.get("/{group_id}/live", response_model=ChannelLiveOut | None)
+async def get_channel_live(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    """Session live en cours pour CETTE chaîne, ou null — alimente le bouton
+    Démarrer/Rejoindre le direct dans les paramètres/l'info de la chaîne."""
+    return await channel_live_service.get_for_channel(db, group_id)
+
+
+@router.post("/{group_id}/live", response_model=ChannelLiveStartOut, status_code=201)
+async def start_channel_live(
+    group_id: uuid.UUID,
+    body: ChannelLiveStartIn,
+    current_user: CurrentUser,
+    db: DbSession,
+):
+    """Démarre un direct (admin de la chaîne uniquement)."""
+    out = await channel_live_service.start(db, current_user, group_id, body)
+    await db.commit()
+    return out
+
+
+@router.post("/{group_id}/live/join", response_model=ChannelLiveJoinOut)
+async def join_channel_live(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    """Rejoint le direct en cours en spectateur (lecture seule)."""
+    return await channel_live_service.join(db, current_user, group_id)
+
+
+@router.post("/{group_id}/live/stop", response_model=ChannelLiveOut)
+async def stop_channel_live(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    """Arrête le direct en cours (admin de la chaîne uniquement)."""
+    out = await channel_live_service.stop(db, current_user, group_id)
+    await db.commit()
+    return out

@@ -37,15 +37,21 @@ def build_access_token(
     identity: str,
     display_name: str | None = None,
     ttl: int | None = None,
+    publish: bool = True,
 ) -> str:
-    """JWT autorisant `identity` a publier/souscrire dans `room_name`."""
+    """JWT autorisant `identity` a rejoindre `room_name`.
+
+    `publish=False` (spectateur d'un live de chaine) : lecture seule — peut
+    ecouter/regarder mais ne peut JAMAIS publier de flux audio/video, contrairement
+    a un participant d'appel classique (`publish=True`, le defaut).
+    """
     _ensure_ready()
     grants = lk_api.VideoGrants(
         room_join=True,
         room=room_name,
-        can_publish=True,
+        can_publish=publish,
         can_subscribe=True,
-        can_publish_data=True,
+        can_publish_data=publish,
         # pas de droits admin : un participant ne peut pas lister/kicker
         room_create=False,
         room_admin=False,
