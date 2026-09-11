@@ -161,6 +161,8 @@ async def create_group(db: AsyncSession, me: User, data: GroupCreate) -> GroupOu
         avatar_url=data.avatar_url,
         owner_id=me.id,
         is_public=data.is_public,
+        # la categorie n'a de sens que pour une chaine
+        category=data.category if data.kind == GroupKind.channel else None,
     )
     db.add(group)
     await db.flush()
@@ -194,7 +196,11 @@ async def update_group(
     group, mem = await _require_member(db, group_id, me.id)
     if not _can_edit_info(group, mem.role):
         raise ForbiddenError("group.cannot_edit_info", code="cannot_edit_info")
-    for field, value in data.model_dump(exclude_unset=True).items():
+    patch = data.model_dump(exclude_unset=True)
+    # la categorie ne s'applique qu'a une chaine
+    if group.kind != GroupKind.channel:
+        patch.pop("category", None)
+    for field, value in patch.items():
         setattr(group, field, value)
     await db.flush()
     await _broadcast(db, group_id, {"type": "group.updated", "group_id": str(group_id)})
@@ -234,6 +240,7 @@ async def preview_by_code(db: AsyncSession, me: User, invite_code: str) -> Group
         name=group.name,
         description=group.description,
         avatar_url=group.avatar_url,
+        category=group.category,
         member_count=int(member_count or 0),
         is_member=is_member,
     )

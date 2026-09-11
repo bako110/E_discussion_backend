@@ -6,9 +6,12 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.db.models.group import GroupKind, GroupRole
+from app.db.models.group import GROUP_CATEGORIES, GroupKind, GroupRole
 from app.schemas.common import ORMModel
 from app.schemas.user import UserPublic
+
+# regex de validation d'un slug de categorie (ou null)
+_CATEGORY = r"^(" + "|".join(GROUP_CATEGORIES) + r")$"
 
 
 class GroupCreate(BaseModel):
@@ -17,6 +20,8 @@ class GroupCreate(BaseModel):
     description: str | None = Field(None, max_length=2000)
     avatar_url: str | None = Field(None, max_length=1024)
     is_public: bool = True
+    # categorie (chaines uniquement) — slug parmi GROUP_CATEGORIES
+    category: str | None = Field(None, pattern=_CATEGORY)
     # membres a ajouter d'emblee (ids utilisateurs)
     member_ids: list[uuid.UUID] = Field(default_factory=list)
 
@@ -29,6 +34,7 @@ class GroupUpdate(BaseModel):
     description: str | None = Field(None, max_length=2000)
     avatar_url: str | None = Field(None, max_length=1024)
     is_public: bool | None = None
+    category: str | None = Field(None, pattern=_CATEGORY)
 
 
 class GroupSettingsIn(BaseModel):
@@ -80,6 +86,7 @@ class GroupOut(ORMModel):
     owner_id: uuid.UUID
     invite_code: str
     is_public: bool = True
+    category: str | None = None
     created_at: datetime
     last_message_at: datetime | None = None
 
@@ -112,6 +119,7 @@ class GroupPreview(ORMModel):
     name: str
     description: str | None = None
     avatar_url: str | None = None
+    category: str | None = None
     member_count: int = 0
     is_member: bool = False
 

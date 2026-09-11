@@ -37,6 +37,26 @@ def _gen_invite_code() -> str:
     return secrets.token_urlsafe(8)[:10]
 
 
+# Categories de CHAINE (slugs). Libelles cote client (i18n). Sert au tri /
+# filtre des chaines. Le client valide aussi cette liste.
+GROUP_CATEGORIES: tuple[str, ...] = (
+    "news",
+    "entertainment",
+    "sport",
+    "tech",
+    "education",
+    "business",
+    "lifestyle",
+    "music",
+    "gaming",
+    "art",
+    "science",
+    "politics",
+    "religion",
+    "other",
+)
+
+
 class GroupKind(str, enum.Enum):
     group = "group"
     channel = "channel"
@@ -68,6 +88,9 @@ class Group(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     # chaine publique : figure dans l'annuaire "chaines populaires"
     is_public: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # categorie d'une CHAINE (slug parmi GROUP_CATEGORIES) — sert au tri /
+    # filtre. Null pour un groupe (sans objet).
+    category: Mapped[str | None] = mapped_column(String(24), index=True)
 
     # ── Parametres (facon WhatsApp — admins uniquement) ──────────────────
     # 'all' (tous les membres) | 'admins' (lecture seule pour les autres)
