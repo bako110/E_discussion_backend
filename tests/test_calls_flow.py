@@ -6,6 +6,8 @@ l'historisation (statut, duree, direction).
 """
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 pytestmark = pytest.mark.asyncio
@@ -94,8 +96,14 @@ def _capture_otp(monkeypatch):
     return codes
 
 
+@pytest.fixture()
+def _push_calls():
+    """Capture tous les appels à push_service.push_to_user (appels)."""
+    return []
+
+
 @pytest.fixture(autouse=True)
-def _enable_calls(monkeypatch):
+def _enable_calls(monkeypatch, _push_calls):
     """Force calls_enabled + stub la generation de token LiveKit."""
     from app.core.config import settings
 
@@ -110,6 +118,13 @@ def _enable_calls(monkeypatch):
 
     monkeypatch.setattr(lk, "build_access_token", _fake_token)
     monkeypatch.setattr(lk, "_ensure_ready", lambda: None)
+
+    import app.services.call_service as call_mod
+
+    async def _fake_push(db, user_id, *, title, body, data=None, high_priority=True):
+        _push_calls.append({"user_id": str(user_id), "data": dict(data or {})})
+
+    monkeypatch.setattr(call_mod.push_service, "push_to_user", _fake_push)
 
 
 async def _register(client, codes, identifier: str) -> tuple[str, str]:
@@ -135,7 +150,13 @@ def _events(redis, user_id: str) -> list[dict]:
     return out
 
 
-async def test_call_ring_accept_hangup(client, _capture_otp, _patch_redis):
+def _pushes_for(push_calls, user_id: str, ptype: str) -> list[dict]:
+    return [
+        p["data"] for p in push_calls if p["user_id"] == user_id and p["data"].get("type") == ptype
+    ]
+
+
+async def test_call_ring_accept_hangup(client, _capture_otp, _patch_redis, _push_calls):
     a_token, a_id = await _register(client, _capture_otp, "+33611111111")
     b_token, b_id = await _register(client, _capture_otp, "+33622222222")
     ah = {"Authorization": f"Bearer {a_token}"}
@@ -167,8 +188,12 @@ async def test_call_ring_accept_hangup(client, _capture_otp, _patch_redis):
     assert incoming[0]["call_id"] == call_id
     assert incoming[0]["e2ee_key"] == "BASE64KEY=="
     assert incoming[0]["call_type"] == "video"
+    # push FCM data-only envoyé EN PLUS du WS au démarrage (couvre le cas où
+    # le destinataire a son app tuée : le WS seul ne suffit pas à le réveiller).
+    assert len(_pushes_for(_push_calls, b_id, "call.incoming")) == 1
 
-    # B accepte -> recoit son propre token, A est notifie
+    # B accepte -> recoit son propre token, A est notifie (WS + push, pour
+    # que l'appelant puisse fermer son écran de sonnerie même app tuée)
     r = await client.post(f"/api/v1/calls/{call_id}/accept", headers=bh)
     assert r.status_code == 200, r.text
     acc = r.json()
@@ -176,12 +201,16 @@ async def test_call_ring_accept_hangup(client, _capture_otp, _patch_redis):
     assert acc["room_name"] == call["room_name"]
     assert acc["e2ee_key"] == "BASE64KEY=="
     assert any(e["type"] == "call.accepted" for e in _events(_patch_redis, a_id))
+    assert len(_pushes_for(_push_calls, a_id, "call.accepted")) == 1
 
-    # A raccroche -> appel 'ended', B notifie
+    # A raccroche -> appel 'ended', B notifie (WS + push)
     r = await client.post(f"/api/v1/calls/{call_id}/hangup", headers=ah)
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "ended"
     assert any(e["type"] == "call.ended" for e in _events(_patch_redis, b_id))
+    ended_pushes = _pushes_for(_push_calls, b_id, "call.ended")
+    assert len(ended_pushes) == 1
+    assert ended_pushes[0]["call_id"] == call_id
 
     # historique cote B : l'appel apparait avec le peer = A
     r = await client.get("/api/v1/calls", headers=bh)
@@ -193,7 +222,7 @@ async def test_call_ring_accept_hangup(client, _capture_otp, _patch_redis):
     assert hist[0]["peer"]["id"] == a_id
 
 
-async def test_call_rejected(client, _capture_otp, _patch_redis):
+async def test_call_rejected(client, _capture_otp, _patch_redis, _push_calls):
     a_token, a_id = await _register(client, _capture_otp, "+33633333333")
     b_token, b_id = await _register(client, _capture_otp, "+33644444444")
     ah = {"Authorization": f"Bearer {a_token}"}
@@ -208,6 +237,7 @@ async def test_call_rejected(client, _capture_otp, _patch_redis):
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "rejected"
     assert any(e["type"] == "call.rejected" for e in _events(_patch_redis, a_id))
+    assert len(_pushes_for(_push_calls, a_id, "call.rejected")) == 1
 
     # A ne peut pas accepter/raccrocher un appel deja termine cote signalisation
     r = await client.post(f"/api/v1/calls/{call_id}/accept", headers=bh)
@@ -218,6 +248,33 @@ async def test_call_rejected(client, _capture_otp, _patch_redis):
     assert r.status_code == 200
     r = await client.get("/api/v1/calls", headers=ah)
     assert r.json() == []
+
+
+async def test_call_ring_timeout_pushes_both_sides(
+    client, _capture_otp, _patch_redis, _push_calls, db_session
+):
+    """Le timeout serveur de sonnerie (pas de reponse) doit fermer la
+    notification plein ecran des DEUX cotes meme si leur app a ete tuee
+    entre-temps — donc pousser un FCM aux deux, pas seulement un WS."""
+    a_token, a_id = await _register(client, _capture_otp, "+33677777777")
+    b_token, b_id = await _register(client, _capture_otp, "+33688888888")
+    ah = {"Authorization": f"Bearer {a_token}"}
+
+    r = await client.post(
+        "/api/v1/calls", json={"callee_id": b_id, "call_type": "voice"}, headers=ah
+    )
+    call_id = r.json()["id"]
+
+    import app.services.call_service as call_mod
+
+    await call_mod.expire_ringing(db_session, uuid.UUID(call_id))
+    await db_session.commit()
+
+    for uid in (a_id, b_id):
+        pushes = _pushes_for(_push_calls, uid, "call.ended")
+        assert len(pushes) == 1
+        assert pushes[0]["status"] == "missed"
+        assert pushes[0]["call_id"] == call_id
 
 
 async def test_call_guards(client, _capture_otp):

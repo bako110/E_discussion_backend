@@ -23,7 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.errors import AppError, ForbiddenError, NotFoundError
-from app.db.redis import is_online
 from app.db.models.call import (
     CallDirection,
     CallLog,
@@ -31,6 +30,7 @@ from app.db.models.call import (
     CallType,
 )
 from app.db.models.user import User
+from app.db.redis import is_online
 from app.schemas.call import (
     CallOut,
     CallStartIn,
@@ -261,6 +261,16 @@ async def accept(db: AsyncSession, me: User, call_id: uuid.UUID) -> CallTokenOut
         str(call.caller_id),
         {"type": "call.accepted", "call_id": str(call.id), "room_name": call.room_name},
     )
+    # push EN PLUS du WS : si l'appelant a son process JS tue (app fermee)
+    # juste apres avoir lance l'appel, il ne recevrait sinon jamais le signal
+    # lui permettant de fermer son ecran de sonnerie sortante.
+    await push_service.push_to_user(
+        db,
+        call.caller_id,
+        title="Appel",
+        body="Appel accepté",
+        data={"type": "call.accepted", "call_id": str(call.id), "room_name": call.room_name},
+    )
 
     out = CallTokenOut(
         livekit_url=settings.LIVEKIT_URL,
@@ -314,6 +324,21 @@ async def _finish(
     if reason:
         payload["reason"] = reason
     await manager.send_to_user(str(other_id), payload)
+    # push EN PLUS du WS : couvre le cas ou l'autre partie a son process JS
+    # tue (app fermee) entre le debut de la sonnerie et cette fin d'appel —
+    # sans ca, sa notification plein ecran resterait bloquee indefiniment.
+    await push_service.push_to_user(
+        db,
+        other_id,
+        title="Appel",
+        body="Appel terminé",
+        data={
+            "type": event,
+            "call_id": str(call.id),
+            "status": call.status.value,
+            "duration_sec": str(call.duration_sec),
+        },
+    )
     return await _to_out(db, me, call)
 
 
@@ -384,6 +409,18 @@ async def clear_stuck(db: AsyncSession, me: User) -> int:
                 "duration_sec": call.duration_sec,
             },
         )
+        await push_service.push_to_user(
+            db,
+            other_id,
+            title="Appel",
+            body="Appel terminé",
+            data={
+                "type": "call.ended",
+                "call_id": str(call.id),
+                "status": call.status.value,
+                "duration_sec": str(call.duration_sec),
+            },
+        )
         n += 1
     await db.flush()
     return n
@@ -403,6 +440,21 @@ async def expire_ringing(db: AsyncSession, call_id: uuid.UUID) -> None:
         await manager.send_to_user(
             str(uid),
             {"type": "call.ended", "call_id": str(call.id), "status": "missed", "duration_sec": 0},
+        )
+        # push EN PLUS du WS — le timeout de sonnerie doit pouvoir fermer la
+        # notification plein ecran meme sur un appareil dont l'app a ete
+        # tuee entre le debut de la sonnerie et l'expiration.
+        await push_service.push_to_user(
+            db,
+            uid,
+            title="Appel",
+            body="Appel manqué",
+            data={
+                "type": "call.ended",
+                "call_id": str(call.id),
+                "status": "missed",
+                "duration_sec": "0",
+            },
         )
 
 
@@ -442,6 +494,18 @@ async def on_livekit_webhook(db: AsyncSession, body: str, auth_header: str) -> N
                     "call_id": str(call.id),
                     "status": call.status.value,
                     "duration_sec": call.duration_sec,
+                },
+            )
+            await push_service.push_to_user(
+                db,
+                uid,
+                title="Appel",
+                body="Appel terminé",
+                data={
+                    "type": "call.ended",
+                    "call_id": str(call.id),
+                    "status": call.status.value,
+                    "duration_sec": str(call.duration_sec),
                 },
             )
 
