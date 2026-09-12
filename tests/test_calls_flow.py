@@ -277,6 +277,81 @@ async def test_call_ring_timeout_pushes_both_sides(
         assert pushes[0]["call_id"] == call_id
 
 
+async def _age_call(db_session, call_id: str, seconds: int) -> None:
+    """Recule started_at de `seconds` pour simuler un vieil appel sans
+    attendre en vrai — sert à tester le filet de sécurité indépendamment du
+    timer in-process (qu'on ne réarme volontairement PAS dans ces tests)."""
+    from datetime import UTC, datetime, timedelta
+
+    import app.services.call_service as call_mod
+    from app.db.models.call import CallLog
+
+    call = await db_session.get(CallLog, uuid.UUID(call_id))
+    call_mod._cancel_ring_timer(call.id)  # on ne veut PAS que le timer réel interfère
+    call.started_at = datetime.now(UTC) - timedelta(seconds=seconds)
+    await db_session.flush()
+
+
+async def test_stale_ringing_call_expires_on_next_touch(
+    client, _capture_otp, _patch_redis, _push_calls, db_session
+):
+    """Filet de sécurité `_maybe_expire_stale` (via `_load`) : un appel
+    resté 'ringing' plus longtemps que CALL_RING_TIMEOUT doit s'auto-expirer
+    dès qu'une requête le touche (ici un simple GET), MÊME SI le timer
+    in-process n'a jamais tourné — reproduit le bug observé en prod où le
+    timer asyncio ne s'est jamais déclenché."""
+    a_token, a_id = await _register(client, _capture_otp, "+33611112222")
+    b_token, b_id = await _register(client, _capture_otp, "+33622223333")
+    ah = {"Authorization": f"Bearer {a_token}"}
+
+    r = await client.post(
+        "/api/v1/calls", json={"callee_id": b_id, "call_type": "voice"}, headers=ah
+    )
+    call_id = r.json()["id"]
+    assert r.json()["status"] == "ringing"
+
+    from app.core.config import settings
+
+    await _age_call(db_session, call_id, settings.CALL_RING_TIMEOUT + 5)
+    await db_session.commit()
+
+    # simple consultation -> _load -> _maybe_expire_stale doit corriger l'état
+    r = await client.get(f"/api/v1/calls/{call_id}", headers=ah)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "missed"
+
+
+async def test_sweep_stale_ringing_calls(
+    client, _capture_otp, _patch_redis, _push_calls, db_session
+):
+    """Filet de sécurité de dernier recours (balayage périodique, voir
+    app.main lifespan) : expire un appel bloqué sans qu'AUCUNE requête ne le
+    touche jamais (personne ne consulte/accepte/rejette/annule)."""
+    a_token, a_id = await _register(client, _capture_otp, "+33611114444")
+    b_token, b_id = await _register(client, _capture_otp, "+33622225555")
+    ah = {"Authorization": f"Bearer {a_token}"}
+
+    r = await client.post(
+        "/api/v1/calls", json={"callee_id": b_id, "call_type": "voice"}, headers=ah
+    )
+    call_id = r.json()["id"]
+
+    from app.core.config import settings
+
+    await _age_call(db_session, call_id, settings.CALL_RING_TIMEOUT + 5)
+    await db_session.commit()
+
+    import app.services.call_service as call_mod
+
+    n = await call_mod.sweep_stale_ringing_calls(db_session)
+    assert n == 1
+
+    from app.db.models.call import CallLog
+
+    call = await db_session.get(CallLog, uuid.UUID(call_id))
+    assert call.status.value == "missed"
+
+
 async def test_call_guards(client, _capture_otp):
     a_token, a_id = await _register(client, _capture_otp, "+33655555555")
     ah = {"Authorization": f"Bearer {a_token}"}

@@ -1,6 +1,8 @@
 """Point d'entree FastAPI — E-discussion backend."""
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -20,6 +22,26 @@ from app.services.ws_manager import manager
 configure_logging()
 log = get_logger(__name__)
 
+# intervalle du balayage des appels "ringing" restés bloqués — voir
+# call_service.sweep_stale_ringing_calls (filet de sécurité indépendant du
+# timer in-process par appel, qui s'est révélé peu fiable en pratique).
+_CALL_SWEEP_INTERVAL_SEC = 15
+
+
+async def _call_sweep_loop() -> None:
+    from app.db.session import AsyncSessionLocal
+    from app.services.call_service import sweep_stale_ringing_calls
+
+    while True:
+        try:
+            await asyncio.sleep(_CALL_SWEEP_INTERVAL_SEC)
+            async with AsyncSessionLocal() as db:
+                await sweep_stale_ringing_calls(db)
+        except asyncio.CancelledError:
+            return
+        except Exception as e:  # pragma: no cover — ne doit jamais tuer la boucle
+            log.warning("call.sweep_failed", error=str(e))
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -27,7 +49,11 @@ async def lifespan(app: FastAPI):
     # Teste Redis ; bascule sur un fallback memoire si indisponible (dev sans
     # Redis) — OTP, cooldown et presence continuent de fonctionner.
     await init_redis()
+    sweep_task = asyncio.create_task(_call_sweep_loop())
     yield
+    sweep_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await sweep_task
     await manager.shutdown()
     await close_redis()
     log.info("shutdown")

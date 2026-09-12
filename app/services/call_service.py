@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.errors import AppError, ForbiddenError, NotFoundError
+from app.core.logging import get_logger
 from app.db.models.call import (
     CallDirection,
     CallLog,
@@ -40,10 +41,21 @@ from app.schemas.call import (
 from app.services import livekit_service, push_service, user_service
 from app.services.ws_manager import manager
 
+log = get_logger(__name__)
+
 # statuts pour lesquels l'appel est encore "en cours" (un seul par paire)
 _LIVE = (CallStatus.ringing, CallStatus.active)
 
 # timers de sonnerie en cours : call_id -> Task (annulés si accept/reject/cancel)
+#
+# NB : ce timer in-process est un mecanisme "best effort" — s'il echoue
+# silencieusement pour une raison quelconque (exception avalee, task jamais
+# vraiment executee...), l'appel resterait bloque en "ringing" indefiniment
+# SANS lui. C'est pour ca que chaque point d'entree qui touche a un appel
+# (`_load`) verifie ET corrige activement l'expiration en plus de ce timer —
+# voir `_load`/`_maybe_expire_stale` : c'est ce filet de secours "lazy" qui
+# garantit le comportement, le timer n'etant qu'une optimisation de latence
+# (fermer la sonnerie tout de suite plutot qu'a la prochaine requete).
 _ring_timers: dict[uuid.UUID, asyncio.Task] = {}
 
 
@@ -69,7 +81,29 @@ async def _load(db: AsyncSession, call_id: uuid.UUID) -> CallLog:
     call = await db.get(CallLog, call_id)
     if call is None:
         raise NotFoundError("calls.not_found", code="call_not_found")
+    await _maybe_expire_stale(db, call)
     return call
+
+
+async def _maybe_expire_stale(db: AsyncSession, call: CallLog) -> None:
+    """Filet de sécurité : si `call` sonne depuis plus de CALL_RING_TIMEOUT,
+    l'expire immédiatement en 'missed'.
+
+    Le timer in-process (`_arm_ring_timer`) est "best effort" — une tâche
+    asyncio en mémoire n'est pas un mécanisme fiable à 100% (échec silencieux,
+    process qui redémarre pendant que ça sonne...). Ce filet, lui, ne dépend
+    d'AUCUN état en mémoire : il recalcule l'âge de l'appel à partir de
+    `started_at` (persisté en DB) à chaque fois qu'on touche à un appel
+    (accept/reject/cancel/hangup/consultation), donc il rattrape TOUJOURS un
+    appel resté bloqué, au plus tard à la prochaine requête le concernant.
+    """
+    if call.status != CallStatus.ringing:
+        return
+    age = _elapsed(call.started_at, _now())
+    if age < settings.CALL_RING_TIMEOUT:
+        return
+    log.info("call.stale_ringing_expired", call_id=str(call.id), age_sec=age)
+    await expire_ringing(db, call.id)
 
 
 def _cancel_ring_timer(call_id: uuid.UUID) -> None:
@@ -92,8 +126,12 @@ def _arm_ring_timer(call_id: uuid.UUID) -> None:
             async with AsyncSessionLocal() as db:
                 await expire_ringing(db, call_id)
                 await db.commit()
-        except Exception:  # pragma: no cover — best effort
-            pass
+        except Exception as e:  # pragma: no cover — best effort
+            # NE PAS avaler silencieusement : sans ce log, un échec ici est
+            # invisible et l'appel reste bloqué en "ringing" jusqu'à ce que
+            # le filet de secours `_maybe_expire_stale` (déclenché par la
+            # prochaine requête d'appel) le rattrape.
+            log.warning("call.ring_timer_failed", call_id=str(call_id), error=str(e))
         finally:
             _ring_timers.pop(call_id, None)
 
@@ -423,6 +461,34 @@ async def clear_stuck(db: AsyncSession, me: User) -> int:
         )
         n += 1
     await db.flush()
+    return n
+
+
+async def sweep_stale_ringing_calls(db: AsyncSession) -> int:
+    """Balayage périodique (voir `app.main` lifespan) : expire TOUS les
+    appels encore 'ringing' depuis plus de CALL_RING_TIMEOUT, tous
+    utilisateurs confondus.
+
+    Filet de sécurité de dernier recours, indépendant du timer in-process
+    par appel (`_arm_ring_timer`) ET de toute requête cliente — couvre le
+    cas où personne ne touche plus jamais à cet appel précis (l'appelant a
+    laissé son app ouverte sans annuler, le destinataire ne décroche ni ne
+    rejette) : sans ce balayage, rien ne rappellerait jamais `expire_ringing`
+    pour lui.
+    """
+    now = _now()
+    rows = (
+        await db.execute(select(CallLog).where(CallLog.status == CallStatus.ringing))
+    ).scalars().all()
+    n = 0
+    for call in rows:
+        if _elapsed(call.started_at, now) < settings.CALL_RING_TIMEOUT:
+            continue
+        await expire_ringing(db, call.id)
+        n += 1
+    if n:
+        await db.commit()
+        log.info("call.sweep_expired", count=n)
     return n
 
 
