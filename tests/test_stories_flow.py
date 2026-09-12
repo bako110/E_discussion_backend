@@ -128,6 +128,36 @@ async def test_story_create_idempotent_by_client_id(client, _capture_otp):
     assert len([s for s in mine if s["id"] == story1["id"]]) == 1
 
 
+async def test_story_reshare_count_visible_to_original_author(client, _capture_otp):
+    token = await _register(client, _capture_otp, "+33699999903")
+    h = {"Authorization": f"Bearer {token}"}
+
+    r1 = await client.post(
+        "/api/v1/stories",
+        json={"media_type": "text", "caption": "Original", "duration_sec": 5},
+        headers=h,
+    )
+    assert r1.status_code == 201, r1.text
+    original = r1.json()
+    assert original["reshare_count"] == 0
+
+    # repartage de son propre statut (façon WhatsApp) -> compteur incrémenté
+    r2 = await client.post(
+        f"/api/v1/stories/{original['id']}/reshare",
+        json={"caption": "Repartagé !"},
+        headers=h,
+    )
+    assert r2.status_code == 201, r2.text
+    reshared = r2.json()
+    assert reshared["reshared_from_id"] == original["id"]
+    assert reshared["reshared_from_author"]["id"] is not None
+
+    r3 = await client.get("/api/v1/stories/mine", headers=h)
+    assert r3.status_code == 200, r3.text
+    mine = {s["id"]: s for s in r3.json()}
+    assert mine[original["id"]]["reshare_count"] == 1
+
+
 async def test_story_create_without_client_id_still_works(client, _capture_otp):
     token = await _register(client, _capture_otp, "+33699999902")
     h = {"Authorization": f"Bearer {token}"}

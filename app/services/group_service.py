@@ -31,6 +31,7 @@ from app.schemas.group import (
     GroupUpdate,
 )
 from app.services import user_service
+from app.services.push_service import push_to_user
 from app.services.ws_manager import manager
 
 _POST_ROLES = {GroupRole.owner, GroupRole.admin, GroupRole.member}
@@ -63,6 +64,17 @@ async def _require_member(
 async def _member_ids(db: AsyncSession, group_id: uuid.UUID) -> list[uuid.UUID]:
     rows = await db.execute(
         select(GroupMember.user_id).where(GroupMember.group_id == group_id)
+    )
+    return [r[0] for r in rows.all()]
+
+
+async def _unmuted_member_ids(db: AsyncSession, group_id: uuid.UUID) -> list[uuid.UUID]:
+    """Membres n'ayant PAS mis ce groupe en sourdine — seuls destinataires
+    d'un push (même logique que les conversations 1-à-1)."""
+    rows = await db.execute(
+        select(GroupMember.user_id).where(
+            GroupMember.group_id == group_id, GroupMember.muted.is_(False)
+        )
     )
     return [r[0] for r in rows.all()]
 
@@ -584,6 +596,37 @@ async def send_message(
         await manager.send_to_user(
             str(uid), {"type": "group.message", "group_id": str(group_id), "message": payload}
         )
+
+    # push (comme les conversations 1-à-1) : systématique, jamais conditionné
+    # à la présence WS (une connexion peut rester active quelques secondes
+    # après passage en arrière-plan — le client déduplique déjà l'affichage
+    # si le message est arrivé entre-temps par WebSocket).
+    if msg.type != "system":
+        sender_name = me.display_name or me.username or "Message"
+        # aperçu BRUT (pas de préfixe "Nom : ") — le client formate lui-même
+        # l'affichage "Nom : texte" pour un groupe, comme pour le WS.
+        preview = msg.body[:120] if msg.type == "text" else f"[{msg.type}]"
+        for uid in await _unmuted_member_ids(db, group_id):
+            if uid == me.id:
+                continue
+            await push_to_user(
+                db,
+                uid,
+                title=group.name,
+                body=preview or "Nouveau message",
+                data={
+                    "type": "message",
+                    "conversation_id": str(group_id),
+                    "group_id": str(group_id),
+                    "group_name": group.name,
+                    "sender_id": str(me.id),
+                    "sender_name": sender_name,
+                    "sender_avatar": me.avatar_url or "",
+                    "message_id": str(msg.id),
+                    "message_type": msg.type,
+                    "encrypted": "0",
+                },
+            )
     return out
 
 

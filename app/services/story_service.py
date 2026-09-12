@@ -22,6 +22,7 @@ from app.schemas.story import (
     StoryFeedItem,
     StoryOut,
     StoryReplyIn,
+    StoryReshareIn,
     StoryUpdate,
     StoryViewerOut,
 )
@@ -97,6 +98,11 @@ async def _serialize(
     reactions = await db.scalar(
         select(func.count()).select_from(StoryReaction).where(StoryReaction.story_id == s.id)
     )
+    reshares = await db.scalar(
+        select(func.count())
+        .select_from(Story)
+        .where(Story.reshared_from_id == s.id, Story.deleted_at.is_(None))
+    )
     seen = await db.scalar(
         select(func.count())
         .select_from(StoryView)
@@ -110,9 +116,17 @@ async def _serialize(
     out = StoryOut.model_validate(s)
     out.view_count = int(views or 0)
     out.reaction_count = int(reactions or 0)
+    out.reshare_count = int(reshares or 0)
     out.seen_by_me = bool(seen)
     out.my_reaction = my_reaction
     out.is_mine = s.author_id == me_id
+
+    if s.reshared_from_id:
+        origin = await db.get(Story, s.reshared_from_id)
+        if origin is not None and origin.deleted_at is None:
+            origin_author = await db.get(User, origin.author_id)
+            if origin_author is not None:
+                out.reshared_from_author = await user_service.serialize_public(origin_author)
     return out
 
 
@@ -162,6 +176,57 @@ async def create_story(db: AsyncSession, me: User, data: StoryCreate) -> StoryOu
     return await _serialize(db, story, me_id=me.id)
 
 
+async def reshare_story(
+    db: AsyncSession, me: User, story_id: uuid.UUID, data: StoryReshareIn
+) -> StoryOut:
+    """Repartage une story existante comme NOUVEAU statut de `me` (« Ajouter
+    à mon statut », façon WhatsApp) : copie les champs média, garde une trace
+    (`reshared_from_id`) et republie sous SA PROPRE audience (une nouvelle
+    story, avec un nouvel auteur, suit les règles de visibilité de cet
+    auteur — pas celles de l'original)."""
+    # idempotence offline, comme create_story.
+    if data.client_id:
+        existing = await db.scalar(
+            select(Story).where(Story.author_id == me.id, Story.client_id == data.client_id)
+        )
+        if existing is not None:
+            return await _serialize(db, existing, me_id=me.id)
+
+    source = await _get_visible(db, me, story_id)
+    # une story restreinte (pas "everyone") ne peut pas etre redistribuee plus
+    # largement par un spectateur — anti-contournement de confidentialite.
+    # L'auteur original peut toujours repartager son propre statut.
+    if source.author_id != me.id and source.audience != "everyone":
+        raise ForbiddenError("story.reshare_restricted", code="reshare_restricted")
+
+    now = datetime.now(UTC)
+    story = Story(
+        author_id=me.id,
+        client_id=data.client_id,
+        media_type=source.media_type,
+        media_url=source.media_url,
+        caption=data.caption if data.caption is not None else source.caption,
+        background_color=source.background_color,
+        font=source.font,
+        duration_sec=source.duration_sec,
+        thumbnail_url=source.thumbnail_url,
+        audio_url=source.audio_url,
+        audio_name=source.audio_name,
+        audience="everyone",
+        reshared_from_id=source.id,
+        expires_at=now + timedelta(hours=STORY_TTL_HOURS),
+    )
+    db.add(story)
+    await db.flush()
+
+    for cid in await _story_audience_ids(db, me):
+        await manager.send_to_user(
+            str(cid),
+            {"type": "story.new", "author_id": str(me.id), "story_id": str(story.id)},
+        )
+    return await _serialize(db, story, me_id=me.id)
+
+
 async def update_story(
     db: AsyncSession, me: User, story_id: uuid.UUID, data: StoryUpdate
 ) -> StoryOut:
@@ -203,11 +268,13 @@ async def delete_story(db: AsyncSession, me: User, story_id: uuid.UUID) -> None:
 
 # ── lecture ────────────────────────────────────────────────────────────────
 async def my_stories(db: AsyncSession, me: User) -> list[StoryOut]:
+    """Mes stories actives, LA PLUS RECENTE D'ABORD — le client (vignette
+    « Mon statut ») utilise le premier element comme apercu courant."""
     rows = (
         await db.execute(
             select(Story)
             .where(Story.author_id == me.id, _active_filter())
-            .order_by(Story.created_at)
+            .order_by(Story.created_at.desc())
         )
     ).scalars().all()
     return [await _serialize(db, s, me_id=me.id) for s in rows]
@@ -263,7 +330,13 @@ async def feed(db: AsyncSession, me: User) -> list[StoryFeedItem]:
 
 async def _get_visible(db: AsyncSession, me: User, story_id: uuid.UUID) -> Story:
     story = await db.get(Story, story_id)
-    if story is None or story.deleted_at is not None or story.expires_at <= datetime.now(UTC):
+    expires_at = story.expires_at if story is not None else None
+    # SQLite (tests) renvoie un datetime naif meme pour une colonne
+    # DateTime(timezone=True) ; Postgres (prod) renvoie toujours aware. On
+    # normalise pour eviter un TypeError lors de la comparaison.
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if story is None or story.deleted_at is not None or expires_at <= datetime.now(UTC):
         raise NotFoundError("story.not_found", code="story_not_found")
     if story.author_id != me.id:
         author = await db.get(User, story.author_id)

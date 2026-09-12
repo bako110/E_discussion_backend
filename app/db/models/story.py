@@ -62,6 +62,13 @@ class Story(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     audio_name: Mapped[str | None] = mapped_column(String(120))
     # audience : 'everyone' (defaut) | 'contacts' — v1 simple
     audience: Mapped[str] = mapped_column(String(16), default="everyone", nullable=False)
+    # renseigne quand cette story est un REPARTAGE d'une autre (façon
+    # WhatsApp « Ajouter à mon statut ») — pointe vers la story d'origine.
+    # SET NULL si l'originale est un jour purgée physiquement (aujourd'hui
+    # seulement soft-delete via deleted_at, mais on protège quand meme).
+    reshared_from_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("stories.id", ondelete="SET NULL")
+    )
 
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), index=True, nullable=False

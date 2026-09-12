@@ -37,6 +37,15 @@ class StoryUpdate(BaseModel):
     duration_sec: int | None = Field(None, ge=1, le=600)
 
 
+class StoryReshareIn(BaseModel):
+    """Repartage d'une story existante comme nouveau statut (« Ajouter à mon
+    statut », façon WhatsApp) — legende éventuellement réécrite par le
+    republieur avant publication."""
+
+    caption: str | None = Field(None, max_length=2000)
+    client_id: str | None = Field(None, max_length=64)
+
+
 class StoryOut(ORMModel):
     id: uuid.UUID
     author_id: uuid.UUID
@@ -53,13 +62,22 @@ class StoryOut(ORMModel):
     created_at: datetime
     expires_at: datetime
     edited_at: datetime | None = None
+    reshared_from_id: uuid.UUID | None = None
 
     # agregats calcules cote service
     view_count: int = 0
     reaction_count: int = 0
+    # nombre de fois que CETTE story a ete repartagee par d'autres (façon
+    # WhatsApp « Ajouter à mon statut ») — visible par l'auteur, meme logique
+    # que view_count/reaction_count.
+    reshare_count: int = 0
     seen_by_me: bool = False
     my_reaction: str | None = None
     is_mine: bool = False
+    # renseigne uniquement si la story d'origine du repartage existe encore
+    # (non expirée/supprimée) — l'auteur original, pour l'affichage « Repartagé
+    # depuis... ».
+    reshared_from_author: UserPublic | None = None
 
 
 class StoryFeedItem(BaseModel):

@@ -16,6 +16,7 @@ from app.schemas.story import (
     StoryOut,
     StoryReactionIn,
     StoryReplyIn,
+    StoryReshareIn,
     StoryUpdate,
     StoryViewerOut,
 )
@@ -51,6 +52,15 @@ async def get_mine(current_user: CurrentUser, db: DbSession):
 @router.post("", response_model=StoryOut, status_code=201)
 async def publish(body: StoryCreate, current_user: CurrentUser, db: DbSession):
     return await story_service.create_story(db, current_user, body)
+
+
+@router.post("/{story_id}/reshare", response_model=StoryOut, status_code=201)
+async def reshare(
+    story_id: uuid.UUID, body: StoryReshareIn, current_user: CurrentUser, db: DbSession
+):
+    """Repartage une story (mienne ou d'un contact) comme nouveau statut,
+    façon WhatsApp « Ajouter à mon statut »."""
+    return await story_service.reshare_story(db, current_user, story_id, body)
 
 
 @router.patch("/{story_id}", response_model=StoryOut)
