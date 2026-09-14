@@ -98,23 +98,29 @@ async def push_to_user(
             # code brut ("INVALID_ARGUMENT", majuscules + underscore) — la
             # comparaison précédente ("invalid-argument", tirets) ne
             # matchait donc JAMAIS et ces tokens n'étaient jamais nettoyés.
-            if (
+            is_stale = (
                 "registration-token-not-registered" in err_lower
                 or "registration_token_not_registered" in err_lower
                 or "invalid-argument" in err_lower
                 or "invalid_argument" in err_lower
                 or "unregistered" in err_lower
-            ):
+            )
+            # log SYSTÉMATIQUE de la raison exacte, même pour un token classé
+            # stale -> indispensable pour diagnostiquer SI "invalid argument"
+            # cache en fait une autre cause (payload malformé, mismatch de
+            # certificat/SHA...) plutôt qu'un vrai token mort.
+            log.warning(
+                "push.token_send_failed",
+                user_id=str(user_id),
+                type=payload.get("type"),
+                token_suffix=tok[-8:],
+                error=str(err),
+                classified_stale=is_stale,
+            )
+            if is_stale:
                 stale.append(tok)
             else:
                 other_failures += 1
-                log.warning(
-                    "push.token_send_failed",
-                    user_id=str(user_id),
-                    type=payload.get("type"),
-                    token_suffix=tok[-8:],
-                    error=str(err),
-                )
         log.info(
             "push.sent",
             user_id=str(user_id),
