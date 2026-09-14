@@ -94,16 +94,21 @@ async def push_to_user(
             err_lower = str(err).lower()
             # tokens définitivement morts -> à purger pour ne plus jamais
             # retenter (et ne pas gonfler indéfiniment la liste par device).
-            # Comparaison EN MINUSCULES : le SDK Firebase Admin renvoie le
-            # code brut ("INVALID_ARGUMENT", majuscules + underscore) — la
-            # comparaison précédente ("invalid-argument", tirets) ne
-            # matchait donc JAMAIS et ces tokens n'étaient jamais nettoyés.
+            #
+            # ATTENTION : "INVALID_ARGUMENT" est un code GÉNÉRIQUE côté
+            # Firebase — il couvre AUSSI bien un token malformé/mort qu'un
+            # PAYLOAD invalide (ex: clé de `data` réservée par FCM, comme
+            # "message_type" découvert en prod : "Invalid data payload key").
+            # Le classer stale sur ce seul code a fait SUPPRIMER un token
+            # parfaitement valide à chaque tentative alors que la vraie cause
+            # était le payload -> on ne considère stale que le message le
+            # plus spécifique possible ("registration token is not a valid
+            # FCM registration token"), jamais le code générique seul.
             is_stale = (
                 "registration-token-not-registered" in err_lower
                 or "registration_token_not_registered" in err_lower
-                or "invalid-argument" in err_lower
-                or "invalid_argument" in err_lower
                 or "unregistered" in err_lower
+                or "not a valid fcm registration token" in err_lower
             )
             # log SYSTÉMATIQUE de la raison exacte, même pour un token classé
             # stale -> indispensable pour diagnostiquer SI "invalid argument"

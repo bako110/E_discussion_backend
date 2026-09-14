@@ -639,7 +639,9 @@ async def send_message(
                     "sender_name": sender_name,
                     "sender_avatar": me.avatar_url or "",
                     "message_id": str(msg.id),
-                    "message_type": msg.type,
+                    # "message_type" est une clé RÉSERVÉE par FCM -> rejetée
+                    # avec "INVALID_ARGUMENT: Invalid data payload key" (voir
+                    # message_service.py, même bug). Jamais lue côté app.
                     "encrypted": "0",
                 },
             )

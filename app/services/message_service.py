@@ -162,7 +162,11 @@ async def send(
                 "sender_name": sender_name,
                 "sender_avatar": me.avatar_url or "",
                 "message_id": str(msg.id),
-                "message_type": msg.type.value,
+                # "message_type" est une clé RÉSERVÉE par FCM -> Firebase
+                # rejette TOUT le payload avec "INVALID_ARGUMENT: Invalid
+                # data payload key: message_type" (silencieux côté client,
+                # aucune notification n'arrive jamais). Jamais lue côté app
+                # (grep sans résultat dans fcm.ts) -> simplement retirée.
                 "encrypted": "1" if msg.encrypted else "0",
             },
         )
