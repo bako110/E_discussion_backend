@@ -27,6 +27,7 @@ from app.schemas.story import (
     StoryViewerOut,
 )
 from app.services import conversation_service, user_service
+from app.services.push_service import push_to_user
 from app.services.ws_manager import manager
 
 STORY_TTL_HOURS = 24
@@ -167,11 +168,26 @@ async def create_story(db: AsyncSession, me: User, data: StoryCreate) -> StoryOu
     db.add(story)
     await db.flush()
 
-    # notifier uniquement l'audience autorisee (event WS leger)
+    # notifier uniquement l'audience autorisee (event WS leger + push data-only
+    # pour reveiller l'app fermee, meme pattern que les messages)
+    author_name = me.display_name or me.username or "Statut"
     for cid in await _story_audience_ids(db, me):
         await manager.send_to_user(
             str(cid),
             {"type": "story.new", "author_id": str(me.id), "story_id": str(story.id)},
+        )
+        await push_to_user(
+            db,
+            cid,
+            title=author_name,
+            body="a publié un nouveau statut",
+            data={
+                "type": "story.new",
+                "author_id": str(me.id),
+                "author_name": author_name,
+                "author_avatar": me.avatar_url or "",
+                "story_id": str(story.id),
+            },
         )
     return await _serialize(db, story, me_id=me.id)
 

@@ -52,6 +52,7 @@ async def push_to_user(
     rows = await db.execute(select(DeviceToken.token).where(DeviceToken.user_id == user_id))
     tokens = [t for (t,) in rows.all()]
     if not tokens:
+        log.info("push.no_device_token", user_id=str(user_id), type=(data or {}).get("type"))
         return
 
     payload: dict[str, str] = {k: str(v) for k, v in (data or {}).items()}
@@ -79,18 +80,41 @@ async def push_to_user(
     )
     try:
         resp = messaging.send_each_for_multicast(msg)
-        # nettoyage des jetons morts
+        # nettoyage des jetons morts + visibilité sur les échecs NON-stale
+        # (silencieux jusqu'ici : un push qui échoue pour une autre raison —
+        # quota, credentials, throttling OEM côté FCM — ne laissait AUCUNE
+        # trace alors que l'appel `push_to_user` ne levait aucune exception).
         stale: list[str] = []
+        other_failures = 0
         for tok, res in zip(tokens, resp.responses):
             if res.success:
                 continue
             err = getattr(res.exception, "code", "") or str(res.exception)
             if "registration-token-not-registered" in str(err) or "invalid-argument" in str(err):
                 stale.append(tok)
+            else:
+                other_failures += 1
+                log.warning(
+                    "push.token_send_failed",
+                    user_id=str(user_id),
+                    type=payload.get("type"),
+                    token_suffix=tok[-8:],
+                    error=str(err),
+                )
+        log.info(
+            "push.sent",
+            user_id=str(user_id),
+            type=payload.get("type"),
+            tokens=len(tokens),
+            success=resp.success_count,
+            failed=len(tokens) - resp.success_count,
+            stale=len(stale),
+            other_failures=other_failures,
+        )
         if stale:
             from app.db.models.push import DeviceToken as _DT
 
             await db.execute(_DT.__table__.delete().where(_DT.token.in_(stale)))
             log.info("push.pruned_stale_tokens", count=len(stale))
     except Exception as e:  # pragma: no cover
-        log.warning("push.send_failed", error=str(e))
+        log.warning("push.send_failed", user_id=str(user_id), type=payload.get("type"), error=str(e))
