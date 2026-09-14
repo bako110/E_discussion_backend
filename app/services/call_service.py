@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -413,18 +413,32 @@ async def hangup(db: AsyncSession, me: User, call_id: uuid.UUID) -> CallOut:
     return await _finish(db, me, call_id, status=CallStatus.ended, event="call.ended")
 
 
-async def clear_stuck(db: AsyncSession, me: User) -> int:
-    """Clôt de force TOUS les appels encore 'live' impliquant l'utilisateur.
+# en dessous de cet âge, un appel "live" n'est PAS considéré comme zombie —
+# évite que clear_stuck() (appelé au démarrage du CallProvider, donc
+# potentiellement pendant qu'un appel légitime vient tout juste d'être lancé
+# ou décroché si l'app redémarre à ce moment précis) ne tue un appel en train
+# de s'établir. Bug réel observé : un appel décroché avec succès
+# (answered_at rempli) terminé 1-2s plus tard par clear_stuck, sans jamais
+# qu'un vrai hangup/cancel n'ait eu lieu.
+_CLEAR_STUCK_MIN_AGE_SEC = 20
 
-    Filet de secours contre les appels zombies (client tué sans hangup,
-    perte réseau au raccroché). Appelé par le client au démarrage / avant de
-    relancer un appel s'il a reçu un 409.
+
+async def clear_stuck(db: AsyncSession, me: User) -> int:
+    """Clôt de force les appels 'live' impliquant l'utilisateur qui datent
+    d'au moins `_CLEAR_STUCK_MIN_AGE_SEC` — un appel plus récent est
+    considéré comme légitimement en train de s'établir, pas zombie.
+
+    Filet de secours contre les VRAIS appels zombies (client tué sans
+    hangup, perte réseau au raccroché). Appelé par le client au démarrage /
+    avant de relancer un appel s'il a reçu un 409.
     """
+    cutoff = _now() - timedelta(seconds=_CLEAR_STUCK_MIN_AGE_SEC)
     rows = (
         await db.execute(
             select(CallLog).where(
                 or_(CallLog.caller_id == me.id, CallLog.callee_id == me.id),
                 CallLog.status.in_(_LIVE),
+                CallLog.started_at < cutoff,
             )
         )
     ).scalars().all()

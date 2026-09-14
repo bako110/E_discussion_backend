@@ -374,3 +374,70 @@ async def test_call_guards(client, _capture_otp):
     assert r.status_code == 201
     r = await client.post("/api/v1/calls", json={"callee_id": b_id}, headers=ah)
     assert r.status_code == 409
+
+
+async def test_clear_stuck_spares_fresh_calls(
+    client, _capture_otp, _patch_redis, _push_calls, db_session
+):
+    """Bug réel observé en prod : un appel tout juste décroché avec succès
+    (answered_at rempli) était terminé 1-2s plus tard par clear_stuck() —
+    appelé au (re)montage du CallProvider (ex: un cycle d'auth/refresh de
+    token qui démonte puis remonte tout l'arbre React pendant l'appel) —
+    sans qu'aucun hangup/cancel réel n'ait eu lieu. clear_stuck() ne doit
+    PAS considérer un appel tout juste répondu comme un zombie."""
+    a_token, a_id = await _register(client, _capture_otp, "+33611116666")
+    b_token, b_id = await _register(client, _capture_otp, "+33622227777")
+    ah = {"Authorization": f"Bearer {a_token}"}
+    bh = {"Authorization": f"Bearer {b_token}"}
+
+    r = await client.post(
+        "/api/v1/calls", json={"callee_id": b_id, "call_type": "voice"}, headers=ah
+    )
+    call_id = r.json()["id"]
+
+    r = await client.post(f"/api/v1/calls/{call_id}/accept", headers=bh)
+    assert r.status_code == 200, r.text
+
+    # le CallProvider de l'APPELANT (a) redémarre juste après avoir décroché
+    # (ex: cycle d'auth) -> re-déclenche clear_stuck() côté a.
+    import app.services.call_service as call_mod
+    from app.db.models.user import User
+
+    n = await call_mod.clear_stuck(db_session, (await db_session.get(User, uuid.UUID(a_id))))
+    await db_session.commit()
+    assert n == 0, "clear_stuck a terminé un appel tout juste décroché — bug reproduit"
+
+    from app.db.models.call import CallLog
+
+    call = await db_session.get(CallLog, uuid.UUID(call_id))
+    assert call.status.value == "active"
+
+
+async def test_clear_stuck_cleans_real_zombie_calls(
+    client, _capture_otp, _patch_redis, _push_calls, db_session
+):
+    """Un VRAI appel zombie (vieux de plus de _CLEAR_STUCK_MIN_AGE_SEC)
+    reste bien nettoyé — clear_stuck garde son rôle de filet de sécurité."""
+    a_token, a_id = await _register(client, _capture_otp, "+33611118888")
+    b_token, b_id = await _register(client, _capture_otp, "+33622229999")
+    ah = {"Authorization": f"Bearer {a_token}"}
+
+    r = await client.post(
+        "/api/v1/calls", json={"callee_id": b_id, "call_type": "voice"}, headers=ah
+    )
+    call_id = r.json()["id"]
+
+    import app.services.call_service as call_mod
+    from app.db.models.user import User
+
+    await _age_call(db_session, call_id, call_mod._CLEAR_STUCK_MIN_AGE_SEC + 5)
+    await db_session.commit()
+
+    n = await call_mod.clear_stuck(db_session, (await db_session.get(User, uuid.UUID(a_id))))
+    await db_session.commit()
+    assert n == 1
+
+    from app.db.models.call import CallLog
+
+    call = await db_session.get(CallLog, uuid.UUID(call_id))
+    assert call.status.value == "cancelled"
