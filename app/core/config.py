@@ -99,7 +99,7 @@ class Settings(BaseSettings):
     # duree de validite d'un token d'acces a une room (secondes)
     LIVEKIT_TOKEN_TTL: int = 3600
     # timeout de sonnerie : au-dela, l'appel bascule en "missed" (secondes)
-    CALL_RING_TIMEOUT: int = 45
+    CALL_RING_TIMEOUT: int = 60
 
     @property
     def calls_enabled(self) -> bool:
