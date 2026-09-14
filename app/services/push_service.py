@@ -89,8 +89,22 @@ async def push_to_user(
         for tok, res in zip(tokens, resp.responses):
             if res.success:
                 continue
-            err = getattr(res.exception, "code", "") or str(res.exception)
-            if "registration-token-not-registered" in str(err) or "invalid-argument" in str(err):
+            code = getattr(res.exception, "code", "")
+            err = f"{code}: {res.exception}" if code else str(res.exception)
+            err_lower = str(err).lower()
+            # tokens définitivement morts -> à purger pour ne plus jamais
+            # retenter (et ne pas gonfler indéfiniment la liste par device).
+            # Comparaison EN MINUSCULES : le SDK Firebase Admin renvoie le
+            # code brut ("INVALID_ARGUMENT", majuscules + underscore) — la
+            # comparaison précédente ("invalid-argument", tirets) ne
+            # matchait donc JAMAIS et ces tokens n'étaient jamais nettoyés.
+            if (
+                "registration-token-not-registered" in err_lower
+                or "registration_token_not_registered" in err_lower
+                or "invalid-argument" in err_lower
+                or "invalid_argument" in err_lower
+                or "unregistered" in err_lower
+            ):
                 stale.append(tok)
             else:
                 other_failures += 1
