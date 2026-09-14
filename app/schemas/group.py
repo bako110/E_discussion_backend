@@ -46,6 +46,8 @@ class GroupSettingsIn(BaseModel):
     join_approval_required: bool | None = None
     invite_visibility: str | None = Field(None, pattern=r"^(both|link|code)$")
     disappearing_seconds: int | None = Field(None, ge=0, le=7776000)  # <= 90 j
+    # CHAINE uniquement — voir Group.sign_messages
+    sign_messages: bool | None = None
 
 
 class GroupSettingsOut(BaseModel):
@@ -55,6 +57,7 @@ class GroupSettingsOut(BaseModel):
     join_approval_required: bool = False
     invite_visibility: str = "both"
     disappearing_seconds: int = 0
+    sign_messages: bool = False
 
 
 class GroupJoinRequestOut(ORMModel):
@@ -109,6 +112,7 @@ class GroupOut(ORMModel):
     join_approval_required: bool = False
     invite_visibility: str = "both"
     disappearing_seconds: int = 0
+    sign_messages: bool = False
 
 
 class GroupPreview(ORMModel):

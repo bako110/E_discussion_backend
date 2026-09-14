@@ -292,3 +292,41 @@ async def test_group_settings_and_join_approval(client, _capture_otp):
     # plus de demande en attente
     r = await client.get(f"/api/v1/groups/{gid}/join-requests", headers=ah)
     assert r.json() == []
+
+
+async def test_channel_sign_messages_setting(client, _capture_otp):
+    """Réglage « Signer les publications » : sauvegardé/lisible via les
+    settings ; le backend continue TOUJOURS de fournir le vrai sender_id
+    sur chaque message — masquer l'auteur est une décision d'AFFICHAGE
+    côté client selon ce réglage, pas une donnée retirée côté serveur."""
+    admin_token, admin_id = await _register(client, _capture_otp, "+33677777801")
+    ah = {"Authorization": f"Bearer {admin_token}"}
+
+    g = (
+        await client.post(
+            "/api/v1/groups", json={"kind": "channel", "name": "Ma chaine"}, headers=ah
+        )
+    ).json()
+    gid = g["id"]
+
+    # défaut : non signé
+    r = await client.get(f"/api/v1/groups/{gid}/settings", headers=ah)
+    assert r.json()["sign_messages"] is False
+
+    r = await client.put(
+        f"/api/v1/groups/{gid}/settings", json={"sign_messages": True}, headers=ah
+    )
+    assert r.status_code == 200, r.text
+
+    r = await client.get(f"/api/v1/groups/{gid}/settings", headers=ah)
+    assert r.json()["sign_messages"] is True
+
+    # le message garde toujours son vrai sender_id, peu importe le réglage —
+    # le masquage est purement un choix d'affichage frontend.
+    r = await client.post(
+        f"/api/v1/groups/{gid}/messages",
+        json={"type": "text", "body": "annonce"},
+        headers=ah,
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["sender_id"] == admin_id

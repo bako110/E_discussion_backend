@@ -350,6 +350,7 @@ async def get_settings(db: AsyncSession, me: User, group_id: uuid.UUID) -> dict:
         "join_approval_required": group.join_approval_required,
         "invite_visibility": group.invite_visibility,
         "disappearing_seconds": group.disappearing_seconds,
+        "sign_messages": group.sign_messages,
     }
 
 

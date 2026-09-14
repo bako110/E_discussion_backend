@@ -115,6 +115,10 @@ class Group(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     disappearing_seconds: Mapped[int] = mapped_column(
         Integer, default=0, nullable=False
     )
+    # CHAINE uniquement (facon Telegram) : par defaut, un message de chaine
+    # n'affiche PAS son auteur individuel (juste le nom de la chaine) — ce
+    # reglage restaure l'affichage du nom de l'admin qui a publie.
+    sign_messages: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     last_message_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), index=True
