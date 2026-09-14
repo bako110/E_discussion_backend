@@ -19,9 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.errors import AppError, ForbiddenError, NotFoundError
+from app.core.logging import get_logger
 from app.db.models.channel_live import ChannelLive, ChannelLiveStatus
 from app.db.models.group import Group, GroupKind, GroupMember, GroupRole
 from app.db.models.user import User
+from app.db.redis import get_redis
 from app.schemas.channel_live import (
     ChannelLiveJoinOut,
     ChannelLiveOut,
@@ -31,7 +33,14 @@ from app.schemas.channel_live import (
 from app.services import livekit_service
 from app.services.ws_manager import manager
 
+log = get_logger(__name__)
+
 _ADMIN_ROLES = {GroupRole.owner, GroupRole.admin}
+# compteur de spectateurs courants par room (hash Redis {"count": "N"}) —
+# alimenté par les webhooks LiveKit participant_joined/left, voir
+# `on_livekit_webhook` plus bas. TTL large : purgé de toute façon au
+# prochain `start()` de la même chaîne (room_name change à chaque live).
+_VIEWERS_TTL = 6 * 3600
 
 
 def _now() -> datetime:
@@ -69,11 +78,22 @@ async def _subscriber_count(db: AsyncSession, group_id: uuid.UUID) -> int:
     return int(n or 0)
 
 
+def _viewers_key(room_name: str) -> str:
+    return f"live:viewers:{room_name}"
+
+
+async def _current_viewers(room_name: str) -> int:
+    d = await get_redis().hgetall(_viewers_key(room_name))
+    return int(d.get("count", "0") or 0)
+
+
 async def _to_out(db: AsyncSession, group: Group, live: ChannelLive) -> ChannelLiveOut:
     out = ChannelLiveOut.model_validate(live)
     out.channel_name = group.name
     out.channel_avatar_url = group.avatar_url
     out.subscriber_count = await _subscriber_count(db, group.id)
+    if live.status == ChannelLiveStatus.live:
+        out.current_viewers = await _current_viewers(live.room_name)
     return out
 
 
@@ -231,3 +251,68 @@ async def get_for_channel(db: AsyncSession, group_id: uuid.UUID) -> ChannelLiveO
     if live is None:
         return None
     return await _to_out(db, group, live)
+
+
+# ── webhook LiveKit ──────────────────────────────────────────────────────
+async def on_livekit_webhook(db: AsyncSession, event) -> None:  # noqa: ANN001 — WebhookEvent LiveKit
+    """Reçoit les events du serveur LiveKit pour les rooms de live (`live_*`).
+
+    Routé depuis le même webhook que les appels (`call_service.on_livekit_webhook`),
+    filtré sur le préfixe de room — voir `app/api/v1/routers/calls.py`.
+
+    Deux rôles :
+    - `participant_joined`/`participant_left` : tient à jour le compteur de
+      spectateurs courants (Redis, `_current_viewers`) ET le record
+      `peak_viewers` (persisté en DB) — jusqu'ici jamais alimenté malgré le
+      commentaire du modèle qui l'annonçait.
+    - `room_finished` : filet de sécurité si le diffuseur perd sa connexion
+      brutalement (crash, réseau coupé) SANS passer par `stop()` — sans ça,
+      le live restait bloqué en base à `status='live'` indéfiniment, alors
+      que la room LiveKit elle-même est bel et bien fermée (plus personne ne
+      peut techniquement rejoindre le flux).
+    """
+    room = getattr(event, "room", None)
+    room_name = getattr(room, "name", "") if room else ""
+    if not room_name or not room_name.startswith("live_"):
+        return
+
+    live = await db.scalar(select(ChannelLive).where(ChannelLive.room_name == room_name))
+    if live is None:
+        return
+
+    kind = getattr(event, "event", "")
+    participant = getattr(event, "participant", None)
+    identity = getattr(participant, "identity", "") if participant else ""
+    # le diffuseur publie sa propre piste — on ne compte que les VRAIS
+    # spectateurs dans le compteur d'audience.
+    is_broadcaster = identity == str(live.started_by)
+
+    if kind == "participant_joined" and live.status == ChannelLiveStatus.live and not is_broadcaster:
+        r = get_redis()
+        key = _viewers_key(room_name)
+        count = await r.hincrby(key, "count", 1)
+        await r.expire(key, _VIEWERS_TTL)
+        if count > live.peak_viewers:
+            live.peak_viewers = count
+            await db.flush()
+    elif kind == "participant_left" and not is_broadcaster:
+        r = get_redis()
+        key = _viewers_key(room_name)
+        d = await r.hgetall(key)
+        current = int(d.get("count", "0") or 0)
+        if current > 0:
+            await r.hincrby(key, "count", -1)
+    elif kind == "room_finished" and live.status == ChannelLiveStatus.live:
+        log.info("channel_live.auto_ended", room_name=room_name, reason="room_finished")
+        live.status = ChannelLiveStatus.ended
+        live.ended_at = _now()
+        await db.flush()
+        group = await db.get(Group, live.group_id)
+        if group is not None:
+            payload = {
+                "type": "channel.live.ended",
+                "group_id": str(live.group_id),
+                "live_id": str(live.id),
+            }
+            for uid in await _member_ids(db, live.group_id):
+                await manager.send_to_user(str(uid), payload)

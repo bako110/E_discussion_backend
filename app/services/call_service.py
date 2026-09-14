@@ -525,13 +525,15 @@ async def expire_ringing(db: AsyncSession, call_id: uuid.UUID) -> None:
 
 
 # ── webhook LiveKit ──────────────────────────────────────────────────────
-async def on_livekit_webhook(db: AsyncSession, body: str, auth_header: str) -> None:
-    """Reçoit les events du serveur LiveKit (room_finished, participant_left…).
+async def on_livekit_webhook(db: AsyncSession, event) -> None:  # noqa: ANN001 — WebhookEvent LiveKit
+    """Reçoit les events du serveur LiveKit (room_finished, participant_left…)
+    pour les rooms d'APPEL (`call_*`) — voir `app/api/v1/routers/calls.py` pour
+    le dispatch selon le préfixe de room (les rooms de live, `live_*`, sont
+    routées vers `channel_live_service.on_livekit_webhook`).
 
     Sert de filet de sécurité : si un participant se déconnecte brutalement,
     LiveKit ferme la room et on clôt le `CallLog` en conséquence.
     """
-    event = livekit_service.verify_webhook(body, auth_header)
     room = getattr(event, "room", None)
     room_name = getattr(room, "name", "") if room else ""
     if not room_name or not room_name.startswith("call_"):

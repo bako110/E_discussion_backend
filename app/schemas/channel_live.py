@@ -22,6 +22,9 @@ class ChannelLiveOut(ORMModel):
     room_name: str
     title: str | None = None
     peak_viewers: int = 0
+    # spectateurs connectés MAINTENANT (calculé depuis Redis, pas persisté) —
+    # distinct de peak_viewers (record historique de la session, en DB).
+    current_viewers: int = 0
     started_at: datetime
     ended_at: datetime | None = None
     # infos chaîne utiles à l'affichage dans la liste "chaînes en direct"

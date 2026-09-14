@@ -15,7 +15,7 @@ from app.core.logging import get_logger
 from app.db.session import AsyncSessionLocal
 from app.schemas.call import CallOut, CallStartIn, CallStartOut, CallTokenOut
 from app.schemas.common import Message
-from app.services import call_service
+from app.services import call_service, channel_live_service, livekit_service
 
 router = APIRouter()
 log = get_logger(__name__)
@@ -109,12 +109,21 @@ async def clear_stuck_calls(current_user: CurrentUser, db: DbSession):
 
 
 # ── webhook LiveKit (non authentifie JWT app — signe par la cle API LiveKit) ─
+# Un seul webhook cote LiveKit pour toute l'infra self-hosted (appels 1-1 ET
+# diffusion en direct des chaines) — on parse la signature une seule fois
+# puis on route selon le prefixe de room (`call_*` vs `live_*`).
 @router.post("/webhooks/livekit", include_in_schema=False)
 async def livekit_webhook(request: Request, authorization: str = Header("")):
     body = (await request.body()).decode("utf-8")
     try:
+        event = livekit_service.verify_webhook(body, authorization)
+        room = getattr(event, "room", None)
+        room_name = getattr(room, "name", "") if room else ""
         async with AsyncSessionLocal() as db:
-            await call_service.on_livekit_webhook(db, body, authorization)
+            if room_name.startswith("live_"):
+                await channel_live_service.on_livekit_webhook(db, event)
+            else:
+                await call_service.on_livekit_webhook(db, event)
             await db.commit()
     except Exception as e:  # pragma: no cover — ne jamais faire echouer LiveKit
         log.warning("livekit.webhook.error", error=str(e))

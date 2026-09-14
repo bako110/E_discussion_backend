@@ -58,12 +58,14 @@ class _FakeRedis:
 def _patch_redis(monkeypatch):
     fake = _FakeRedis()
     import app.db.redis as redis_mod
+    import app.services.channel_live_service as channel_live_mod
     import app.services.otp_service as otp_mod
     import app.services.ws_manager as ws_mod
 
     monkeypatch.setattr(redis_mod, "get_redis", lambda: fake)
     monkeypatch.setattr(otp_mod, "get_redis", lambda: fake)
     monkeypatch.setattr(ws_mod, "get_redis", lambda: fake)
+    monkeypatch.setattr(channel_live_mod, "get_redis", lambda: fake)
     return fake
 
 
@@ -201,3 +203,73 @@ async def test_channel_live_start_join_stop(client, _capture_otp):
     # un nouveau direct peut redemarrer ensuite
     r = await client.post(f"/api/v1/groups/{group_id}/live", json={}, headers=oh)
     assert r.status_code == 201, r.text
+
+
+def _fake_event(*, room_name: str, kind: str, identity: str = ""):
+    """Simule un WebhookEvent LiveKit (room.name / event / participant.identity)."""
+    from types import SimpleNamespace
+
+    participant = SimpleNamespace(identity=identity) if identity else None
+    return SimpleNamespace(
+        room=SimpleNamespace(name=room_name), event=kind, participant=participant
+    )
+
+
+async def test_channel_live_webhook_tracks_viewers_and_autoends(
+    client, _capture_otp, _patch_redis, db_session
+):
+    """Le webhook LiveKit (participant_joined/left, room_finished) doit :
+    - compter les VRAIS spectateurs (pas le diffuseur lui-même) et mettre à
+      jour peak_viewers ;
+    - clôturer automatiquement le live si la room se ferme brutalement côté
+      LiveKit (diffuseur qui crashe sans appeler /live/stop)."""
+    owner_token, owner_id = await _register(client, _capture_otp, "+33611110000")
+    sub_token, sub_id = await _register(client, _capture_otp, "+33622220000")
+    oh = {"Authorization": f"Bearer {owner_token}"}
+
+    r = await client.post(
+        "/api/v1/groups",
+        json={"kind": "channel", "name": "Chaine webhook", "member_ids": [sub_id]},
+        headers=oh,
+    )
+    group_id = r.json()["id"]
+
+    r = await client.post(f"/api/v1/groups/{group_id}/live", json={}, headers=oh)
+    assert r.status_code == 201, r.text
+    live = r.json()
+    room_name = live["room_name"]
+    assert live["current_viewers"] == 0
+
+    import app.services.channel_live_service as cls
+
+    # le diffuseur rejoint sa propre room -> ne doit PAS compter comme spectateur
+    await cls.on_livekit_webhook(
+        db_session, _fake_event(room_name=room_name, kind="participant_joined", identity=owner_id)
+    )
+    # un vrai spectateur rejoint
+    await cls.on_livekit_webhook(
+        db_session, _fake_event(room_name=room_name, kind="participant_joined", identity=sub_id)
+    )
+    await db_session.commit()
+
+    r = await client.get(f"/api/v1/groups/{group_id}/live", headers=oh)
+    assert r.json()["current_viewers"] == 1
+    assert r.json()["peak_viewers"] == 1
+
+    # le spectateur repart
+    await cls.on_livekit_webhook(
+        db_session, _fake_event(room_name=room_name, kind="participant_left", identity=sub_id)
+    )
+    await db_session.commit()
+    r = await client.get(f"/api/v1/groups/{group_id}/live", headers=oh)
+    assert r.json()["current_viewers"] == 0
+    assert r.json()["peak_viewers"] == 1  # le record ne redescend pas
+
+    # room fermee brutalement cote LiveKit (crash du diffuseur) -> auto-ended
+    await cls.on_livekit_webhook(
+        db_session, _fake_event(room_name=room_name, kind="room_finished")
+    )
+    await db_session.commit()
+    r = await client.get(f"/api/v1/groups/{group_id}/live", headers=oh)
+    assert r.status_code == 200
+    assert r.json() is None  # plus de live actif pour cette chaine
