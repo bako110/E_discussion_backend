@@ -160,8 +160,28 @@ async def test_channel_live_start_join_stop(client, _capture_otp):
     assert live["token"].startswith("jwt-pub-")
     room_name = live["room_name"]
 
-    # un 2e demarrage echoue (deja live)
+    # un 2e demarrage PAR LE MEME ADMIN ne casse pas : on lui redonne un
+    # acces a SA room (cas reel : il ferme l'ecran sans "Arreter" puis
+    # rouvre pour reprendre la diffusion, sans jamais avoir vraiment coupe
+    # le live cote serveur).
     r = await client.post(f"/api/v1/groups/{group_id}/live", json={}, headers=oh)
+    assert r.status_code == 201, r.text
+    resumed = r.json()
+    assert resumed["room_name"] == room_name
+    assert resumed["token"].startswith("jwt-pub-")
+
+    # un admin DIFFERENT ne peut pas demarrer par-dessus (vrai conflit)
+    admin2_token, admin2_id = await _register(client, _capture_otp, "+33688880000")
+    await client.post(
+        f"/api/v1/groups/{group_id}/members", json={"user_ids": [admin2_id]}, headers=oh
+    )
+    await client.put(
+        f"/api/v1/groups/{group_id}/members/{admin2_id}/role",
+        json={"role": "admin"},
+        headers=oh,
+    )
+    a2h = {"Authorization": f"Bearer {admin2_token}"}
+    r = await client.post(f"/api/v1/groups/{group_id}/live", json={}, headers=a2h)
     assert r.status_code == 409, r.text
 
     # la chaine apparait dans la liste "chaines en direct" de l'abonne

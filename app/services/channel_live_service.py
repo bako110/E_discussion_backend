@@ -115,8 +115,25 @@ async def start(
         )
     )
     if existing is not None:
-        raise AppError(
-            "channel.live.already_live", status_code=409, code="channel_already_live"
+        if existing.started_by != me.id:
+            raise AppError(
+                "channel.live.already_live", status_code=409, code="channel_already_live"
+            )
+        # C'est MOI qui ai déjà démarré ce live (ex: j'ai fermé l'écran sans
+        # appuyer sur "Arrêter", puis je rouvre pour reprendre la diffusion) —
+        # on me redonne juste un nouveau token pour la MÊME room, au lieu de
+        # renvoyer 409 comme si quelqu'un d'autre diffusait déjà.
+        token = livekit_service.build_access_token(
+            room_name=existing.room_name,
+            identity=str(me.id),
+            display_name=me.display_name or me.username,
+            publish=True,
+        )
+        out = await _to_out(db, group, existing)
+        return ChannelLiveStartOut(
+            **out.model_dump(),
+            livekit_url=settings.LIVEKIT_URL,
+            token=token,
         )
 
     room_name = f"live_{uuid.uuid4().hex}"
