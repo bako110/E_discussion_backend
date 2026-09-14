@@ -14,7 +14,13 @@ from app.db.models.conversation import (
     ConversationRequest,
 )
 from app.db.models.device import Device, OneTimePreKey
-from app.db.models.group import Group, GroupJoinRequest, GroupMember, GroupMessage
+from app.db.models.group import (
+    Group,
+    GroupJoinRequest,
+    GroupMember,
+    GroupMessage,
+    GroupMessageReaction,
+)
 from app.db.models.message import Message, MessageReaction, MessageReceipt
 from app.db.models.privacy import PrivacyAudienceEntry, PrivacyField
 from app.db.models.push import DeviceToken
@@ -58,6 +64,7 @@ __all__ = [
     "Group",
     "GroupMember",
     "GroupMessage",
+    "GroupMessageReaction",
     "GroupJoinRequest",
     "ChannelLive",
     "ChannelLiveStatus",

@@ -22,6 +22,7 @@ from app.schemas.group import (
     GroupMemberOut,
     GroupMessageCreate,
     GroupMessageOut,
+    GroupMessageReactIn,
     GroupOut,
     GroupPreview,
     GroupSettingsIn,
@@ -199,6 +200,21 @@ async def post_message(
     db: DbSession,
 ):
     return await group_service.send_message(db, current_user, group_id, body)
+
+
+@router.post(
+    "/{group_id}/messages/{message_id}/react", response_model=GroupMessageOut
+)
+async def react_to_message(
+    group_id: uuid.UUID,
+    message_id: uuid.UUID,
+    body: GroupMessageReactIn,
+    current_user: CurrentUser,
+    db: DbSession,
+):
+    return await group_service.react_to_message(
+        db, current_user, group_id, message_id, body.emoji
+    )
 
 
 @router.put("/{group_id}/read", response_model=Message)

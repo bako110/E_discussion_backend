@@ -18,6 +18,7 @@ from app.db.models.group import (
     GroupKind,
     GroupMember,
     GroupMessage,
+    GroupMessageReaction,
     GroupRole,
 )
 from app.db.models.user import User
@@ -154,13 +155,27 @@ async def _serialize_group(
 
 
 async def _serialize_message(
-    db: AsyncSession, m: GroupMessage, *, with_sender: bool = True
+    db: AsyncSession, m: GroupMessage, *, me_id: uuid.UUID, with_sender: bool = True
 ) -> GroupMessageOut:
     out = GroupMessageOut.model_validate(m)
     if with_sender:
         sender = await db.get(User, m.sender_id)
         if sender is not None:
             out.sender = await user_service.serialize_public(sender)
+
+    rows = (
+        await db.execute(
+            select(GroupMessageReaction.emoji, func.count())
+            .where(GroupMessageReaction.message_id == m.id)
+            .group_by(GroupMessageReaction.emoji)
+        )
+    ).all()
+    out.reactions = {emoji: int(n) for emoji, n in rows}
+    out.my_reaction = await db.scalar(
+        select(GroupMessageReaction.emoji).where(
+            GroupMessageReaction.message_id == m.id, GroupMessageReaction.user_id == me_id
+        )
+    )
     return out
 
 
@@ -574,7 +589,7 @@ async def send_message(
             )
         )
         if dup is not None:
-            return await _serialize_message(db, dup)
+            return await _serialize_message(db, dup, me_id=me.id)
 
     msg = GroupMessage(
         group_id=group_id,
@@ -589,7 +604,7 @@ async def send_message(
     group.last_message_at = datetime.now(UTC)
     await db.flush()
 
-    out = await _serialize_message(db, msg)
+    out = await _serialize_message(db, msg, me_id=me.id)
     payload = out.model_dump(mode="json")
     for uid in await _member_ids(db, group_id):
         if uid == me.id:
@@ -645,7 +660,47 @@ async def history(
         q = q.where(GroupMessage.created_at < before)
     rows = (await db.execute(q)).scalars().all()
     rows = list(reversed(rows))
-    return [await _serialize_message(db, m) for m in rows]
+    return [await _serialize_message(db, m, me_id=me.id) for m in rows]
+
+
+async def react_to_message(
+    db: AsyncSession, me: User, group_id: uuid.UUID, message_id: uuid.UUID, emoji: str | None
+) -> GroupMessageOut:
+    """Reagit (ou retire sa reaction si emoji=None) sur un message de groupe/
+    chaine — meme mecanique que message_service.react (1-1) : un seul emoji
+    par utilisateur, remplace en re-reagissant."""
+    await _require_member(db, group_id, me.id)
+    msg = await db.get(GroupMessage, message_id)
+    if msg is None or msg.group_id != group_id or msg.deleted_at is not None:
+        raise NotFoundError("group.message_not_found", code="message_not_found")
+
+    row = await db.scalar(
+        select(GroupMessageReaction).where(
+            GroupMessageReaction.message_id == message_id,
+            GroupMessageReaction.user_id == me.id,
+        )
+    )
+    if emoji is None:
+        if row:
+            await db.delete(row)
+    elif row:
+        row.emoji = emoji
+    else:
+        db.add(GroupMessageReaction(message_id=message_id, user_id=me.id, emoji=emoji))
+    await db.flush()
+
+    out = await _serialize_message(db, msg, me_id=me.id)
+    await _broadcast(
+        db,
+        group_id,
+        {
+            "type": "group.message.reaction",
+            "group_id": str(group_id),
+            "message_id": str(message_id),
+            "reactions": out.reactions,
+        },
+    )
+    return out
 
 
 async def mark_read(db: AsyncSession, me: User, group_id: uuid.UUID) -> None:

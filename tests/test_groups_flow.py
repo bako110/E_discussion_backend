@@ -330,3 +330,61 @@ async def test_channel_sign_messages_setting(client, _capture_otp):
     )
     assert r.status_code == 201, r.text
     assert r.json()["sender_id"] == admin_id
+
+
+async def test_group_message_reactions(client, _capture_otp):
+    """Réactions sur les messages de groupe — mêmes règles que les messages
+    1-1 : un seul emoji par utilisateur, remplace en re-réagissant, retiré
+    avec emoji=null. Agrégées par emoji, ma propre réaction exposée à part."""
+    a_token, a_id = await _register(client, _capture_otp, "+33677777901")
+    b_token, b_id = await _register(client, _capture_otp, "+33677777902")
+    ah = {"Authorization": f"Bearer {a_token}"}
+    bh = {"Authorization": f"Bearer {b_token}"}
+
+    g = (
+        await client.post(
+            "/api/v1/groups",
+            json={"kind": "group", "name": "Réagi", "member_ids": [b_id]},
+            headers=ah,
+        )
+    ).json()
+    gid = g["id"]
+
+    r = await client.post(
+        f"/api/v1/groups/{gid}/messages", json={"type": "text", "body": "salut"}, headers=ah
+    )
+    mid = r.json()["id"]
+    assert r.json()["reactions"] == {}
+    assert r.json()["my_reaction"] is None
+
+    # B réagit
+    r = await client.post(
+        f"/api/v1/groups/{gid}/messages/{mid}/react", json={"emoji": "👍"}, headers=bh
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["reactions"] == {"👍": 1}
+
+    # A réagit avec un emoji différent
+    r = await client.post(
+        f"/api/v1/groups/{gid}/messages/{mid}/react", json={"emoji": "❤️"}, headers=ah
+    )
+    assert r.json()["reactions"] == {"👍": 1, "❤️": 1}
+    assert r.json()["my_reaction"] == "❤️"
+
+    # A change sa réaction (remplace, ne s'additionne pas)
+    r = await client.post(
+        f"/api/v1/groups/{gid}/messages/{mid}/react", json={"emoji": "👍"}, headers=ah
+    )
+    assert r.json()["reactions"] == {"👍": 2}
+
+    # B retire sa réaction
+    r = await client.post(
+        f"/api/v1/groups/{gid}/messages/{mid}/react", json={"emoji": None}, headers=bh
+    )
+    assert r.json()["reactions"] == {"👍": 1}
+
+    # visible aussi via l'historique
+    r = await client.get(f"/api/v1/groups/{gid}/messages", headers=bh)
+    msg = next(m for m in r.json() if m["id"] == mid)
+    assert msg["reactions"] == {"👍": 1}
+    assert msg["my_reaction"] is None

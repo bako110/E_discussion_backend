@@ -182,3 +182,22 @@ class GroupMessage(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GroupMessageReaction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Reaction emoji sur un message de groupe/chaine — meme mecanique que
+    MessageReaction (1-1) : un seul emoji par utilisateur et par message,
+    remplace en re-reagissant, retire en renvoyant emoji=null."""
+
+    __tablename__ = "group_message_reactions"
+    __table_args__ = (
+        UniqueConstraint("message_id", "user_id", name="uq_group_reaction_msg_user"),
+    )
+
+    message_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("group_messages.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    emoji: Mapped[str] = mapped_column(String(16), nullable=False)

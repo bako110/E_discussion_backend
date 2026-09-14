@@ -136,6 +136,12 @@ class GroupMessageCreate(BaseModel):
     client_id: str | None = Field(None, max_length=64)
 
 
+class GroupMessageReactIn(BaseModel):
+    """emoji=null retire ma reaction."""
+
+    emoji: str | None = Field(None, min_length=1, max_length=16)
+
+
 class GroupMessageOut(ORMModel):
     id: uuid.UUID
     group_id: uuid.UUID
@@ -149,6 +155,10 @@ class GroupMessageOut(ORMModel):
     edited_at: datetime | None = None
     deleted_at: datetime | None = None
     created_at: datetime
+    # reactions agregees — {emoji: count}, calcule cote service
+    reactions: dict[str, int] = Field(default_factory=dict)
+    # mon propre emoji sur ce message, ou None
+    my_reaction: str | None = None
 
 
 class JoinIn(BaseModel):
