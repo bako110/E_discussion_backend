@@ -7,6 +7,7 @@ from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUser, DbSession
 from app.schemas.common import Message
+from app.schemas.report import UserReportIn, UserReportOut
 from app.schemas.user import (
     PrivacyFieldIn,
     PrivacyFieldOut,
@@ -15,7 +16,7 @@ from app.schemas.user import (
     UserPublic,
     UserUpdate,
 )
-from app.services import user_service
+from app.services import report_service, user_service
 from app.services.user_service import serialize_me, serialize_public
 
 router = APIRouter()
@@ -77,3 +78,10 @@ async def block(user_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
 async def unblock(user_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
     await user_service.unblock_user(db, current_user, user_id)
     return Message(message="unblocked")
+
+
+@router.post("/{user_id}/report", response_model=UserReportOut, status_code=201)
+async def report(
+    user_id: uuid.UUID, body: UserReportIn, current_user: CurrentUser, db: DbSession
+):
+    return await report_service.report_user(db, current_user, user_id, body)

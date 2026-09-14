@@ -206,6 +206,54 @@ async def test_block_hides_profile_and_blocks_contact(client, _capture_otp):
     assert r.json()["avatar_url"] == "https://x/a.jpg"
 
 
+async def test_report_user(client, _capture_otp):
+    alice_token, _ = await _register(client, _capture_otp, "+33689999999")
+    bob_token, bob_id = await _register(client, _capture_otp, "+33689999998")
+    ah = {"Authorization": f"Bearer {alice_token}"}
+
+    r = await client.post(
+        f"/api/v1/users/{bob_id}/report",
+        json={"reason": "spam", "details": "m'envoie des liens louches"},
+        headers=ah,
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["reported_id"] == bob_id
+    assert body["reason"] == "spam"
+
+    # un meme profil peut etre signale plusieurs fois (pas de contrainte d'unicite)
+    r = await client.post(
+        f"/api/v1/users/{bob_id}/report",
+        json={"reason": "harassment"},
+        headers=ah,
+    )
+    assert r.status_code == 201, r.text
+
+
+async def test_report_self_rejected(client, _capture_otp):
+    alice_token, alice_id = await _register(client, _capture_otp, "+33689999997")
+    ah = {"Authorization": f"Bearer {alice_token}"}
+
+    r = await client.post(
+        f"/api/v1/users/{alice_id}/report",
+        json={"reason": "other"},
+        headers=ah,
+    )
+    assert r.status_code == 400
+
+
+async def test_report_unknown_user_404(client, _capture_otp):
+    alice_token, _ = await _register(client, _capture_otp, "+33689999996")
+    ah = {"Authorization": f"Bearer {alice_token}"}
+
+    r = await client.post(
+        "/api/v1/users/00000000-0000-0000-0000-000000000000/report",
+        json={"reason": "other"},
+        headers=ah,
+    )
+    assert r.status_code == 404
+
+
 async def test_read_receipts_toggle_persists(client, _capture_otp):
     token, _ = await _register(client, _capture_otp, "+33685555555")
     h = {"Authorization": f"Bearer {token}"}

@@ -24,6 +24,7 @@ from app.db.models.group import (
 from app.db.models.message import Message, MessageReaction, MessageReceipt
 from app.db.models.privacy import PrivacyAudienceEntry, PrivacyField
 from app.db.models.push import DeviceToken
+from app.db.models.report import ReportReason, UserReport
 from app.db.models.story import (
     Story,
     StoryAudienceEntry,
@@ -68,4 +69,6 @@ __all__ = [
     "GroupJoinRequest",
     "ChannelLive",
     "ChannelLiveStatus",
+    "UserReport",
+    "ReportReason",
 ]
