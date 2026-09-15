@@ -18,6 +18,7 @@ from app.schemas.common import Message
 from app.schemas.group import (
     AddMembersIn,
     DiscoverChannelsOut,
+    DiscussionChannelOut,
     DiscussionLinkIn,
     GroupCreate,
     GroupJoinRequestOut,
@@ -111,17 +112,29 @@ async def reset_invite(group_id: uuid.UUID, current_user: CurrentUser, db: DbSes
     return await group_service.reset_invite_code(db, current_user, group_id)
 
 
+@router.get("/{group_id}/discussion", response_model=list[DiscussionChannelOut])
+async def list_discussions(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    """Canaux de discussion liés à cette chaîne (jusqu'à 5)."""
+    return await group_service.list_discussions(db, current_user, group_id)
+
+
 @router.post("/{group_id}/discussion", response_model=GroupOut)
 async def link_discussion(
     group_id: uuid.UUID, body: DiscussionLinkIn, current_user: CurrentUser, db: DbSession
 ):
-    """Lie un canal de discussion (existant ou nouveau) à cette chaîne."""
+    """Lie un NOUVEAU canal de discussion (existant ou nouveau) à cette
+    chaîne — jusqu'à 5 canaux liés en même temps."""
     return await group_service.link_discussion(db, current_user, group_id, body)
 
 
-@router.delete("/{group_id}/discussion", response_model=GroupOut)
-async def unlink_discussion(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
-    return await group_service.unlink_discussion(db, current_user, group_id)
+@router.delete("/{group_id}/discussion/{discussion_group_id}", response_model=GroupOut)
+async def unlink_discussion(
+    group_id: uuid.UUID,
+    discussion_group_id: uuid.UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+):
+    return await group_service.unlink_discussion(db, current_user, group_id, discussion_group_id)
 
 
 @router.get("/{group_id}/members", response_model=list[GroupMemberOut])

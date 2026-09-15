@@ -108,7 +108,8 @@ class GroupOut(ORMModel):
     invite_code: str
     is_public: bool = True
     category: str | None = None
-    discussion_group_id: uuid.UUID | None = None
+    # chaîne uniquement : canaux de discussion liés (jusqu'à MAX_DISCUSSION_CHANNELS)
+    discussion_group_ids: list[uuid.UUID] = Field(default_factory=list)
     created_at: datetime
     last_message_at: datetime | None = None
 
@@ -138,7 +139,8 @@ class GroupOut(ORMModel):
 
 
 class GroupPreview(ORMModel):
-    """Vue publique avant de rejoindre (retour du scan QR / lien)."""
+    """Vue publique avant de rejoindre (retour du scan QR / lien, ou de
+    l'annuaire des chaînes publiques)."""
 
     id: uuid.UUID
     kind: GroupKind
@@ -151,11 +153,15 @@ class GroupPreview(ORMModel):
     is_paid: bool = False
     subscription_price_cents: int | None = None
     subscription_currency: str | None = None
+    # renseigne seulement pour l'annuaire (chaines publiques) — permet de
+    # rejoindre directement sans repasser par un lien/QR separe.
+    invite_code: str | None = None
 
 
 class DiscussionLinkIn(BaseModel):
-    """Lie un canal de discussion existant OU en cree un nouveau — un seul
-    des deux champs doit etre fourni."""
+    """Lie un NOUVEAU canal de discussion (existant OU à créer) — un seul
+    des deux champs doit etre fourni. Une chaîne peut en lier plusieurs
+    (jusqu'à MAX_DISCUSSION_CHANNELS), voir ChannelDiscussion."""
 
     existing_group_id: uuid.UUID | None = None
     new_group_name: str | None = Field(None, min_length=1, max_length=120)
@@ -167,6 +173,15 @@ class DiscussionLinkIn(BaseModel):
                 "fournir soit existing_group_id, soit new_group_name (un seul des deux)"
             )
         return self
+
+
+class DiscussionChannelOut(ORMModel):
+    """Un canal de discussion lié — id + nom, pour l'affichage de la liste."""
+
+    id: uuid.UUID
+    name: str
+    avatar_url: str | None = None
+    member_count: int = 0
 
 
 class GroupMessageCreate(BaseModel):

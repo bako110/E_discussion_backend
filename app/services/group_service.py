@@ -12,6 +12,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, ForbiddenError, NotFoundError
+from app.db.models.channel_discussion import MAX_DISCUSSION_CHANNELS, ChannelDiscussion
 from app.db.models.group import (
     Group,
     GroupJoinRequest,
@@ -23,6 +24,7 @@ from app.db.models.group import (
 )
 from app.db.models.user import User
 from app.schemas.group import (
+    DiscussionChannelOut,
     DiscussionLinkIn,
     GroupCreate,
     GroupMemberOut,
@@ -38,6 +40,36 @@ from app.services.ws_manager import manager
 
 _POST_ROLES = {GroupRole.owner, GroupRole.admin, GroupRole.member}
 _ADMIN_ROLES = {GroupRole.owner, GroupRole.admin}
+
+# Plafond de membres pour un GROUPE (kind='group') uniquement — une CHAÎNE
+# n'a pas de limite d'abonnés, c'est sa nature (diffusion à grande échelle).
+# C'est ce qui distingue structurellement les deux, au-delà du seul champ
+# `kind` : un groupe reste une discussion à taille humaine, une chaîne peut
+# grossir sans limite.
+MAX_GROUP_MEMBERS = 2000
+
+
+async def _member_count(db: AsyncSession, group_id: uuid.UUID) -> int:
+    return int(
+        await db.scalar(
+            select(func.count()).select_from(GroupMember).where(GroupMember.group_id == group_id)
+        )
+        or 0
+    )
+
+
+async def _check_group_capacity(db: AsyncSession, group: Group, adding: int) -> None:
+    """Lève si ajouter `adding` membres dépasserait MAX_GROUP_MEMBERS — sans
+    objet pour une chaîne (abonnés illimités)."""
+    if group.kind != GroupKind.group:
+        return
+    current = await _member_count(db, group.id)
+    if current + adding > MAX_GROUP_MEMBERS:
+        raise AppError(
+            "group.member_limit_reached",
+            status_code=409,
+            code="member_limit_reached",
+        )
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -87,11 +119,11 @@ async def _broadcast(db: AsyncSession, group_id: uuid.UUID, payload: dict) -> No
 
 
 def _can_post(group: Group, role: GroupRole) -> bool:
-    if group.kind == GroupKind.channel:
-        return role in _ADMIN_ROLES
     if getattr(group, "send_messages_policy", "all") == "admins":
         return role in _ADMIN_ROLES
-    return role in _POST_ROLES
+    # 'all' : tout membre actif peut publier — y compris un abonne de chaine
+    # (role='subscriber'), qui n'est ni admin ni dans _POST_ROLES par defaut.
+    return role in _POST_ROLES or role == GroupRole.subscriber
 
 
 def _can_edit_info(group: Group, role: GroupRole) -> bool:
@@ -152,6 +184,13 @@ async def _serialize_group(
         out.last_message_preview = (
             last_msg.body[:120] if last_msg.type == "text" else f"[{last_msg.type}]"
         )
+    if group.kind == GroupKind.channel:
+        rows = await db.execute(
+            select(ChannelDiscussion.discussion_group_id).where(
+                ChannelDiscussion.channel_id == group.id
+            )
+        )
+        out.discussion_group_ids = [r[0] for r in rows.all()]
     return out
 
 
@@ -182,6 +221,11 @@ async def _serialize_message(
 
 # ── creation / edition ─────────────────────────────────────────────────────
 async def create_group(db: AsyncSession, me: User, data: GroupCreate) -> GroupOut:
+    if data.kind == GroupKind.group and len(set(data.member_ids) | {me.id}) > MAX_GROUP_MEMBERS:
+        raise AppError(
+            "group.member_limit_reached", status_code=409, code="member_limit_reached"
+        )
+
     group = Group(
         kind=data.kind,
         name=data.name.strip(),
@@ -191,6 +235,9 @@ async def create_group(db: AsyncSession, me: User, data: GroupCreate) -> GroupOu
         is_public=data.is_public,
         # la categorie n'a de sens que pour une chaine
         category=data.category if data.kind == GroupKind.channel else None,
+        # CHAINE : diffusion pure par defaut (seuls owner/admin publient) —
+        # l'admin peut ensuite l'ouvrir a tous les abonnes via les reglages.
+        send_messages_policy="admins" if data.kind == GroupKind.channel else "all",
     )
     db.add(group)
     await db.flush()
@@ -321,6 +368,7 @@ async def list_public_channels(
                 is_paid=group.is_paid,
                 subscription_price_cents=group.subscription_price_cents,
                 subscription_currency=group.subscription_currency,
+                invite_code=group.invite_code,
             )
         )
     return out
@@ -404,6 +452,7 @@ async def join_by_code(db: AsyncSession, me: User, invite_code: str) -> GroupOut
                         },
                     )
             raise ForbiddenError("group.join_pending", code="join_pending")
+        await _check_group_capacity(db, group, 1)
         await _add_member_now(db, group, me)
     return await _serialize_group(db, group, me_id=me.id)
 
@@ -481,6 +530,7 @@ async def decide_join_request(
     if approve:
         target = await db.get(User, target_id)
         if target is not None and await _membership(db, group_id, target_id) is None:
+            await _check_group_capacity(db, group, 1)
             await _add_member_now(db, group, target)
     await manager.send_to_user(
         str(target_id),
@@ -538,6 +588,7 @@ async def add_members(
     group, mem = await _require_member(db, group_id, me.id)
     if not _can_add_members(group, mem.role):
         raise ForbiddenError("group.cannot_add_members", code="cannot_add_members")
+    await _check_group_capacity(db, group, len(set(user_ids)))
     base_role = (
         GroupRole.subscriber if group.kind == GroupKind.channel else GroupRole.member
     )
@@ -627,19 +678,50 @@ async def reset_invite_code(db: AsyncSession, me: User, group_id: uuid.UUID) -> 
     return await _serialize_group(db, group, me_id=me.id)
 
 
-# ── discussion liee (chaine) ─────────────────────────────────────────────
+# ── discussion liee (chaine) — plusieurs canaux possibles, max 5 ────────────
+async def list_discussions(
+    db: AsyncSession, me: User, group_id: uuid.UUID
+) -> list[DiscussionChannelOut]:
+    channel, _ = await _require_member(db, group_id, me.id)
+    if channel.kind != GroupKind.channel:
+        raise ForbiddenError("group.not_a_channel", code="not_a_channel")
+    rows = (
+        await db.execute(
+            select(ChannelDiscussion.discussion_group_id).where(
+                ChannelDiscussion.channel_id == group_id
+            )
+        )
+    ).scalars().all()
+    out: list[DiscussionChannelOut] = []
+    for gid in rows:
+        g = await db.get(Group, gid)
+        if g is None:
+            continue
+        count = await _member_count(db, g.id)
+        out.append(
+            DiscussionChannelOut(id=g.id, name=g.name, avatar_url=g.avatar_url, member_count=count)
+        )
+    return out
+
+
 async def link_discussion(
     db: AsyncSession, me: User, group_id: uuid.UUID, data: DiscussionLinkIn
 ) -> GroupOut:
-    """Lie un canal de discussion existant (dont je suis admin) OU en cree
-    un nouveau — un seul canal de discussion a la fois (relie l'ancien
-    d'abord via `unlink_discussion` pour en changer)."""
+    """Lie un NOUVEAU canal de discussion (existant, dont je suis admin, OU
+    à créer) à cette chaîne — jusqu'à MAX_DISCUSSION_CHANNELS en même temps
+    (un canal ne peut être lié qu'à UNE seule chaîne à la fois)."""
     channel, _ = await _require_admin(db, group_id, me.id)
     if channel.kind != GroupKind.channel:
         raise ForbiddenError("group.not_a_channel", code="not_a_channel")
-    if channel.discussion_group_id is not None:
+
+    current = (
+        await db.execute(
+            select(ChannelDiscussion).where(ChannelDiscussion.channel_id == group_id)
+        )
+    ).scalars().all()
+    if len(current) >= MAX_DISCUSSION_CHANNELS:
         raise AppError(
-            "group.discussion_already_linked", status_code=409, code="discussion_already_linked"
+            "group.discussion_limit_reached", status_code=409, code="discussion_limit_reached"
         )
 
     if data.new_group_name:
@@ -656,16 +738,37 @@ async def link_discussion(
         discussion, _ = await _require_admin(db, data.existing_group_id, me.id)
         if discussion.kind != GroupKind.channel:
             raise ForbiddenError("group.not_a_channel", code="not_a_channel")
+        already = await db.scalar(
+            select(ChannelDiscussion).where(
+                ChannelDiscussion.discussion_group_id == discussion.id
+            )
+        )
+        if already is not None:
+            raise AppError(
+                "group.discussion_already_linked",
+                status_code=409,
+                code="discussion_already_linked",
+            )
 
-    channel.discussion_group_id = discussion.id
+    db.add(ChannelDiscussion(channel_id=group_id, discussion_group_id=discussion.id))
     await db.flush()
     await _broadcast(db, group_id, {"type": "group.updated", "group_id": str(group_id)})
     return await _serialize_group(db, channel, me_id=me.id)
 
 
-async def unlink_discussion(db: AsyncSession, me: User, group_id: uuid.UUID) -> GroupOut:
+async def unlink_discussion(
+    db: AsyncSession, me: User, group_id: uuid.UUID, discussion_group_id: uuid.UUID
+) -> GroupOut:
     channel, _ = await _require_admin(db, group_id, me.id)
-    channel.discussion_group_id = None
+    link = await db.scalar(
+        select(ChannelDiscussion).where(
+            ChannelDiscussion.channel_id == group_id,
+            ChannelDiscussion.discussion_group_id == discussion_group_id,
+        )
+    )
+    if link is None:
+        raise NotFoundError("group.discussion_not_found", code="discussion_not_found")
+    await db.delete(link)
     await db.flush()
     await _broadcast(db, group_id, {"type": "group.updated", "group_id": str(group_id)})
     return await _serialize_group(db, channel, me_id=me.id)

@@ -120,13 +120,6 @@ class Group(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # reglage restaure l'affichage du nom de l'admin qui a publie.
     sign_messages: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-    # CHAINE uniquement : canal de discussion lie (facon Telegram) — un
-    # second Group (kind='channel') ou les abonnes peuvent commenter les
-    # publications. Auto-reference sur `groups`, jamais obligatoire.
-    discussion_group_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("groups.id", ondelete="SET NULL"), index=True
-    )
-
     # CHAINE uniquement : abonnement payant — structure de donnees seulement,
     # aucun encaissement reel pour l'instant (pas de prestataire branche).
     is_paid: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
