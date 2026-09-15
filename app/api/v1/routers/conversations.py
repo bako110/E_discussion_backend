@@ -16,7 +16,8 @@ from app.schemas.conversation import (
     SharedMediaOut,
     StartConversationIn,
 )
-from app.services import conversation_service, message_service
+from app.schemas.pinned_message import PinMessageIn, PinnedMessageOut
+from app.services import conversation_service, message_service, pinned_message_service
 
 router = APIRouter()
 
@@ -140,3 +141,30 @@ async def shared_media(
     return await conversation_service.list_media(
         db, current_user, conversation_id, offset=page.offset, limit=page.limit
     )
+
+
+@router.get("/{conversation_id}/pinned", response_model=list[PinnedMessageOut])
+async def list_pinned(conversation_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    return await pinned_message_service.list_conversation(db, current_user, conversation_id)
+
+
+@router.post("/{conversation_id}/pinned", response_model=PinnedMessageOut, status_code=201)
+async def pin_message(
+    conversation_id: uuid.UUID, body: PinMessageIn, current_user: CurrentUser, db: DbSession
+):
+    return await pinned_message_service.pin_conversation_message(
+        db, current_user, conversation_id, body.message_id
+    )
+
+
+@router.delete("/{conversation_id}/pinned/{message_id}", response_model=Message)
+async def unpin_message(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+):
+    await pinned_message_service.unpin_conversation_message(
+        db, current_user, conversation_id, message_id
+    )
+    return Message(message="unpinned")

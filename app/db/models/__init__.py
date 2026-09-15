@@ -22,6 +22,7 @@ from app.db.models.group import (
     GroupMessageReaction,
 )
 from app.db.models.message import Message, MessageReaction, MessageReceipt
+from app.db.models.pinned_message import PinnedMessage
 from app.db.models.privacy import PrivacyAudienceEntry, PrivacyField
 from app.db.models.push import DeviceToken
 from app.db.models.report import ReportReason, UserReport
@@ -71,4 +72,5 @@ __all__ = [
     "ChannelLiveStatus",
     "UserReport",
     "ReportReason",
+    "PinnedMessage",
 ]

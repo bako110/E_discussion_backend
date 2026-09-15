@@ -34,7 +34,8 @@ from app.schemas.group import (
     JoinIn,
     SetRoleIn,
 )
-from app.services import channel_live_service, group_service
+from app.schemas.pinned_message import PinMessageIn, PinnedMessageOut
+from app.services import channel_live_service, group_service, pinned_message_service
 
 router = APIRouter()
 
@@ -310,3 +311,29 @@ async def stop_channel_live(group_id: uuid.UUID, current_user: CurrentUser, db: 
     out = await channel_live_service.stop(db, current_user, group_id)
     await db.commit()
     return out
+
+
+@router.get("/{group_id}/pinned", response_model=list[PinnedMessageOut])
+async def list_pinned_messages(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    return await pinned_message_service.list_group(db, current_user, group_id)
+
+
+@router.post("/{group_id}/pinned", response_model=PinnedMessageOut, status_code=201)
+async def pin_group_message(
+    group_id: uuid.UUID, body: PinMessageIn, current_user: CurrentUser, db: DbSession
+):
+    """Épingle un message (owner/admin uniquement, comme WhatsApp)."""
+    return await pinned_message_service.pin_group_message(
+        db, current_user, group_id, body.message_id
+    )
+
+
+@router.delete("/{group_id}/pinned/{message_id}", response_model=Message)
+async def unpin_group_message(
+    group_id: uuid.UUID,
+    message_id: uuid.UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+):
+    await pinned_message_service.unpin_group_message(db, current_user, group_id, message_id)
+    return Message(message="unpinned")
