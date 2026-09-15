@@ -14,8 +14,9 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.session import AsyncSessionLocal
 from app.schemas.call import CallOut, CallStartIn, CallStartOut, CallTokenOut
+from app.schemas.call_rating import CallRatingIn, CallRatingOut
 from app.schemas.common import Message
-from app.services import call_service, channel_live_service, livekit_service
+from app.services import call_rating_service, call_service, channel_live_service, livekit_service
 
 router = APIRouter()
 log = get_logger(__name__)
@@ -81,6 +82,17 @@ async def cancel_call(call_id: uuid.UUID, current_user: CurrentUser, db: DbSessi
 @router.post("/{call_id}/hangup", response_model=CallOut)
 async def hangup_call(call_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
     out = await call_service.hangup(db, current_user, call_id)
+    await db.commit()
+    return out
+
+
+@router.post("/{call_id}/rating", response_model=CallRatingOut, status_code=status.HTTP_201_CREATED)
+async def rate_call(
+    call_id: uuid.UUID, body: CallRatingIn, current_user: CurrentUser, db: DbSession
+):
+    """Note de l'appel (obligatoire) + note de l'app (facultative), proposees
+    occasionnellement cote client apres un appel connecte."""
+    out = await call_rating_service.rate_call(db, current_user, call_id, body)
     await db.commit()
     return out
 

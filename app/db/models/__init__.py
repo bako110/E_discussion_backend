@@ -5,6 +5,7 @@ from app.db.base import Base
 from app.db.models.auth import OtpChallenge, RefreshToken
 from app.db.models.block import UserBlock
 from app.db.models.call import CallDirection, CallLog, CallStatus, CallType
+from app.db.models.call_rating import CallRating
 from app.db.models.channel_discussion import ChannelDiscussion
 from app.db.models.channel_live import ChannelLive, ChannelLiveStatus
 from app.db.models.contact import UserContact
@@ -75,4 +76,5 @@ __all__ = [
     "ReportReason",
     "PinnedMessage",
     "ChannelDiscussion",
+    "CallRating",
 ]
