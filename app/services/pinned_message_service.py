@@ -7,6 +7,7 @@ entré, premier sorti" implicite qui surprendrait l'utilisateur).
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +20,7 @@ from app.db.models.message import Message
 from app.db.models.pinned_message import PinnedMessage
 from app.db.models.user import User
 from app.schemas.pinned_message import (
+    PIN_DURATIONS,
     PinnedMessageOut,
     PinnedMessagePreview,
 )
@@ -27,6 +29,31 @@ from app.services.ws_manager import manager
 
 _MAX_PINNED = 3
 _ADMIN_ROLES = {GroupRole.owner, GroupRole.admin}
+
+
+def _expiry_from_duration(duration: str) -> datetime | None:
+    seconds = PIN_DURATIONS.get(duration)
+    if seconds is None:
+        return None
+    return datetime.now(UTC) + timedelta(seconds=seconds)
+
+
+async def _purge_expired(db: AsyncSession, rows: list[PinnedMessage]) -> list[PinnedMessage]:
+    """Désépingle paresseusement (au moment de la lecture) les entrées dont
+    `expires_at` est dépassé, et retourne uniquement celles encore valides."""
+    now = datetime.now(UTC)
+    kept: list[PinnedMessage] = []
+    expired: list[PinnedMessage] = []
+    for p in rows:
+        if p.expires_at is not None and p.expires_at <= now:
+            expired.append(p)
+        else:
+            kept.append(p)
+    for p in expired:
+        await db.delete(p)
+    if expired:
+        await db.flush()
+    return kept
 
 
 async def _serialize(db: AsyncSession, pin: PinnedMessage) -> PinnedMessageOut:
@@ -58,11 +85,16 @@ async def list_conversation(
             .order_by(PinnedMessage.created_at.desc())
         )
     ).scalars().all()
+    rows = await _purge_expired(db, list(rows))
     return [await _serialize(db, p) for p in rows]
 
 
 async def pin_conversation_message(
-    db: AsyncSession, me: User, conversation_id: uuid.UUID, message_id: uuid.UUID
+    db: AsyncSession,
+    me: User,
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    duration: str = "forever",
 ) -> PinnedMessageOut:
     conv = await conversation_service.get_owned(db, me, conversation_id)
     msg = await db.get(Message, message_id)
@@ -80,13 +112,17 @@ async def pin_conversation_message(
             select(PinnedMessage).where(PinnedMessage.conversation_id == conversation_id)
         )
     ).scalars().all()
+    current = await _purge_expired(db, list(current))
     if len(current) >= _MAX_PINNED:
         raise AppError(
             "pin.limit_reached", status_code=409, code="pin_limit_reached"
         )
 
     pin = PinnedMessage(
-        conversation_id=conversation_id, message_id=message_id, pinned_by=me.id
+        conversation_id=conversation_id,
+        message_id=message_id,
+        pinned_by=me.id,
+        expires_at=_expiry_from_duration(duration),
     )
     db.add(pin)
     await db.flush()
@@ -165,11 +201,16 @@ async def list_group(
             .order_by(PinnedMessage.created_at.desc())
         )
     ).scalars().all()
+    rows = await _purge_expired(db, list(rows))
     return [await _serialize(db, p) for p in rows]
 
 
 async def pin_group_message(
-    db: AsyncSession, me: User, group_id: uuid.UUID, message_id: uuid.UUID
+    db: AsyncSession,
+    me: User,
+    group_id: uuid.UUID,
+    message_id: uuid.UUID,
+    duration: str = "forever",
 ) -> PinnedMessageOut:
     await _require_group_admin(db, group_id, me.id)
     gmsg = await db.get(GroupMessageModel, message_id)
@@ -185,10 +226,16 @@ async def pin_group_message(
     current = (
         await db.execute(select(PinnedMessage).where(PinnedMessage.group_id == group_id))
     ).scalars().all()
+    current = await _purge_expired(db, list(current))
     if len(current) >= _MAX_PINNED:
         raise AppError("pin.limit_reached", status_code=409, code="pin_limit_reached")
 
-    pin = PinnedMessage(group_id=group_id, message_id=message_id, pinned_by=me.id)
+    pin = PinnedMessage(
+        group_id=group_id,
+        message_id=message_id,
+        pinned_by=me.id,
+        expires_at=_expiry_from_duration(duration),
+    )
     db.add(pin)
     await db.flush()
 

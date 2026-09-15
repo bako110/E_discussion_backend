@@ -10,8 +10,9 @@ deux). Qui peut épingler est vérifié côté service, pas ici :
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import ForeignKey, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -39,3 +40,6 @@ class PinnedMessage(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     pinned_by: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
+    # null = épinglé indéfiniment. Sinon, désépinglé automatiquement (lecture
+    # paresseuse — voir pinned_message_service._purge_expired) à cette date.
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

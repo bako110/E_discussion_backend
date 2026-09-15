@@ -337,7 +337,7 @@ async def pin_group_message(
 ):
     """Épingle un message (owner/admin uniquement, comme WhatsApp)."""
     return await pinned_message_service.pin_group_message(
-        db, current_user, group_id, body.message_id
+        db, current_user, group_id, body.message_id, body.duration
     )
 
 

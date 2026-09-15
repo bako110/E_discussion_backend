@@ -153,7 +153,7 @@ async def pin_message(
     conversation_id: uuid.UUID, body: PinMessageIn, current_user: CurrentUser, db: DbSession
 ):
     return await pinned_message_service.pin_conversation_message(
-        db, current_user, conversation_id, body.message_id
+        db, current_user, conversation_id, body.message_id, body.duration
     )
 
 
