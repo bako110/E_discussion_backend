@@ -23,6 +23,7 @@ from app.db.models.group import (
 )
 from app.db.models.user import User
 from app.schemas.group import (
+    DiscussionLinkIn,
     GroupCreate,
     GroupMemberOut,
     GroupMessageCreate,
@@ -270,7 +271,59 @@ async def preview_by_code(db: AsyncSession, me: User, invite_code: str) -> Group
         category=group.category,
         member_count=int(member_count or 0),
         is_member=is_member,
+        is_paid=group.is_paid,
+        subscription_price_cents=group.subscription_price_cents,
+        subscription_currency=group.subscription_currency,
     )
+
+
+async def list_public_channels(
+    db: AsyncSession,
+    me: User,
+    *,
+    category: str | None = None,
+    query: str | None = None,
+    limit: int = 20,
+) -> list[GroupPreview]:
+    """Annuaire des chaines publiques — decouverte sans invitation ni contact
+    commun. Triees par nombre de membres decroissant."""
+    member_count_col = (
+        select(func.count())
+        .select_from(GroupMember)
+        .where(GroupMember.group_id == Group.id)
+        .correlate(Group)
+        .scalar_subquery()
+    )
+    q = (
+        select(Group, member_count_col.label("member_count"))
+        .where(Group.kind == GroupKind.channel, Group.is_public.is_(True))
+    )
+    if category:
+        q = q.where(Group.category == category)
+    if query:
+        q = q.where(Group.name.ilike(f"%{query.strip()}%"))
+    q = q.order_by(member_count_col.desc()).limit(limit)
+
+    rows = (await db.execute(q)).all()
+    out: list[GroupPreview] = []
+    for group, member_count in rows:
+        is_member = await _membership(db, group.id, me.id) is not None
+        out.append(
+            GroupPreview(
+                id=group.id,
+                kind=group.kind,
+                name=group.name,
+                description=group.description,
+                avatar_url=group.avatar_url,
+                category=group.category,
+                member_count=int(member_count or 0),
+                is_member=is_member,
+                is_paid=group.is_paid,
+                subscription_price_cents=group.subscription_price_cents,
+                subscription_currency=group.subscription_currency,
+            )
+        )
+    return out
 
 
 async def members(db: AsyncSession, me: User, group_id: uuid.UUID) -> list[GroupMemberOut]:
@@ -366,6 +419,9 @@ async def get_settings(db: AsyncSession, me: User, group_id: uuid.UUID) -> dict:
         "invite_visibility": group.invite_visibility,
         "disappearing_seconds": group.disappearing_seconds,
         "sign_messages": group.sign_messages,
+        "is_paid": group.is_paid,
+        "subscription_price_cents": group.subscription_price_cents,
+        "subscription_currency": group.subscription_currency,
     }
 
 
@@ -571,6 +627,50 @@ async def reset_invite_code(db: AsyncSession, me: User, group_id: uuid.UUID) -> 
     return await _serialize_group(db, group, me_id=me.id)
 
 
+# ── discussion liee (chaine) ─────────────────────────────────────────────
+async def link_discussion(
+    db: AsyncSession, me: User, group_id: uuid.UUID, data: DiscussionLinkIn
+) -> GroupOut:
+    """Lie un canal de discussion existant (dont je suis admin) OU en cree
+    un nouveau — un seul canal de discussion a la fois (relie l'ancien
+    d'abord via `unlink_discussion` pour en changer)."""
+    channel, _ = await _require_admin(db, group_id, me.id)
+    if channel.kind != GroupKind.channel:
+        raise ForbiddenError("group.not_a_channel", code="not_a_channel")
+    if channel.discussion_group_id is not None:
+        raise AppError(
+            "group.discussion_already_linked", status_code=409, code="discussion_already_linked"
+        )
+
+    if data.new_group_name:
+        discussion = Group(
+            kind=GroupKind.channel,
+            name=data.new_group_name.strip(),
+            owner_id=me.id,
+            is_public=channel.is_public,
+        )
+        db.add(discussion)
+        await db.flush()
+        db.add(GroupMember(group_id=discussion.id, user_id=me.id, role=GroupRole.owner))
+    else:
+        discussion, _ = await _require_admin(db, data.existing_group_id, me.id)
+        if discussion.kind != GroupKind.channel:
+            raise ForbiddenError("group.not_a_channel", code="not_a_channel")
+
+    channel.discussion_group_id = discussion.id
+    await db.flush()
+    await _broadcast(db, group_id, {"type": "group.updated", "group_id": str(group_id)})
+    return await _serialize_group(db, channel, me_id=me.id)
+
+
+async def unlink_discussion(db: AsyncSession, me: User, group_id: uuid.UUID) -> GroupOut:
+    channel, _ = await _require_admin(db, group_id, me.id)
+    channel.discussion_group_id = None
+    await db.flush()
+    await _broadcast(db, group_id, {"type": "group.updated", "group_id": str(group_id)})
+    return await _serialize_group(db, channel, me_id=me.id)
+
+
 # ── messages ───────────────────────────────────────────────────────────────
 async def send_message(
     db: AsyncSession, me: User, group_id: uuid.UUID, data: GroupMessageCreate
@@ -599,6 +699,7 @@ async def send_message(
         attachment_url=data.attachment_url,
         attachment_meta=data.attachment_meta,
         client_id=data.client_id,
+        forwarded_from_id=data.forwarded_from_id,
     )
     db.add(msg)
     group.last_message_at = datetime.now(UTC)
@@ -646,6 +747,63 @@ async def send_message(
                 },
             )
     return out
+
+
+async def edit_message(
+    db: AsyncSession, me: User, group_id: uuid.UUID, message_id: uuid.UUID, body: str
+) -> GroupMessageOut:
+    """Édite un message de groupe — auteur uniquement (même règle que le
+    1-1, pas de modération d'édition par un admin : on ne réécrit jamais les
+    mots de quelqu'un d'autre)."""
+    await _require_member(db, group_id, me.id)
+    msg = await db.get(GroupMessage, message_id)
+    if msg is None or msg.group_id != group_id or msg.deleted_at is not None:
+        raise NotFoundError("group.message_not_found", code="message_not_found")
+    if msg.sender_id != me.id:
+        raise ForbiddenError("message.not_owner", code="not_owner")
+
+    msg.body = body
+    msg.edited_at = datetime.now(UTC)
+    await db.flush()
+
+    out = await _serialize_message(db, msg, me_id=me.id)
+    await _broadcast(
+        db,
+        group_id,
+        {
+            "type": "group.message.edited",
+            "group_id": str(group_id),
+            "message": out.model_dump(mode="json"),
+        },
+    )
+    return out
+
+
+async def delete_message(
+    db: AsyncSession, me: User, group_id: uuid.UUID, message_id: uuid.UUID
+) -> None:
+    """Supprime un message de groupe pour tout le monde — l'auteur, ou un
+    admin/owner (modération), comme WhatsApp le permet dans les groupes."""
+    group, mem = await _require_member(db, group_id, me.id)
+    msg = await db.get(GroupMessage, message_id)
+    if msg is None or msg.group_id != group_id or msg.deleted_at is not None:
+        raise NotFoundError("group.message_not_found", code="message_not_found")
+    if msg.sender_id != me.id and mem.role not in _ADMIN_ROLES:
+        raise ForbiddenError("message.not_owner", code="not_owner")
+
+    msg.deleted_at = datetime.now(UTC)
+    msg.body = ""
+    await db.flush()
+
+    await _broadcast(
+        db,
+        group_id,
+        {
+            "type": "group.message.deleted",
+            "group_id": str(group_id),
+            "message_id": str(message_id),
+        },
+    )
 
 
 async def history(

@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.db.models.group import GROUP_CATEGORIES, GroupKind, GroupRole
 from app.schemas.common import ORMModel
@@ -48,6 +48,21 @@ class GroupSettingsIn(BaseModel):
     disappearing_seconds: int | None = Field(None, ge=0, le=7776000)  # <= 90 j
     # CHAINE uniquement — voir Group.sign_messages
     sign_messages: bool | None = None
+    # CHAINE uniquement — abonnement payant (structure seulement, voir
+    # Group.is_paid). Si is_paid=True, prix + devise obligatoires.
+    is_paid: bool | None = None
+    subscription_price_cents: int | None = Field(None, ge=0)
+    subscription_currency: str | None = Field(None, min_length=3, max_length=3)
+
+    @model_validator(mode="after")
+    def _check_subscription_fields(self) -> "GroupSettingsIn":
+        if self.is_paid:
+            if self.subscription_price_cents is None or self.subscription_currency is None:
+                raise ValueError(
+                    "subscription_price_cents et subscription_currency sont "
+                    "requis quand is_paid=True"
+                )
+        return self
 
 
 class GroupSettingsOut(BaseModel):
@@ -58,6 +73,9 @@ class GroupSettingsOut(BaseModel):
     invite_visibility: str = "both"
     disappearing_seconds: int = 0
     sign_messages: bool = False
+    is_paid: bool = False
+    subscription_price_cents: int | None = None
+    subscription_currency: str | None = None
 
 
 class GroupJoinRequestOut(ORMModel):
@@ -90,6 +108,7 @@ class GroupOut(ORMModel):
     invite_code: str
     is_public: bool = True
     category: str | None = None
+    discussion_group_id: uuid.UUID | None = None
     created_at: datetime
     last_message_at: datetime | None = None
 
@@ -113,6 +132,9 @@ class GroupOut(ORMModel):
     invite_visibility: str = "both"
     disappearing_seconds: int = 0
     sign_messages: bool = False
+    is_paid: bool = False
+    subscription_price_cents: int | None = None
+    subscription_currency: str | None = None
 
 
 class GroupPreview(ORMModel):
@@ -126,14 +148,38 @@ class GroupPreview(ORMModel):
     category: str | None = None
     member_count: int = 0
     is_member: bool = False
+    is_paid: bool = False
+    subscription_price_cents: int | None = None
+    subscription_currency: str | None = None
+
+
+class DiscussionLinkIn(BaseModel):
+    """Lie un canal de discussion existant OU en cree un nouveau — un seul
+    des deux champs doit etre fourni."""
+
+    existing_group_id: uuid.UUID | None = None
+    new_group_name: str | None = Field(None, min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def _check_one_of(self) -> "DiscussionLinkIn":
+        if bool(self.existing_group_id) == bool(self.new_group_name):
+            raise ValueError(
+                "fournir soit existing_group_id, soit new_group_name (un seul des deux)"
+            )
+        return self
 
 
 class GroupMessageCreate(BaseModel):
-    type: str = Field("text", pattern="^(text|image|video)$")
+    type: str = Field("text", pattern="^(text|image|video|voice|file)$")
     body: str = Field("", max_length=20000)
     attachment_url: str | None = Field(None, max_length=1024)
     attachment_meta: dict | None = None
     client_id: str | None = Field(None, max_length=64)
+    forwarded_from_id: uuid.UUID | None = None
+
+
+class GroupMessageEditIn(BaseModel):
+    body: str = Field(..., max_length=20000)
 
 
 class GroupMessageReactIn(BaseModel):
@@ -152,6 +198,7 @@ class GroupMessageOut(ORMModel):
     body: str
     attachment_url: str | None = None
     attachment_meta: dict | None = None
+    forwarded_from_id: uuid.UUID | None = None
     edited_at: datetime | None = None
     deleted_at: datetime | None = None
     created_at: datetime
@@ -163,3 +210,8 @@ class GroupMessageOut(ORMModel):
 
 class JoinIn(BaseModel):
     invite_code: str = Field(..., min_length=4, max_length=16)
+
+
+class DiscoverChannelsOut(BaseModel):
+    items: list[GroupPreview] = Field(default_factory=list)
+    next_cursor: str | None = None

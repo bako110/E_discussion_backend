@@ -17,10 +17,13 @@ from app.schemas.channel_live import (
 from app.schemas.common import Message
 from app.schemas.group import (
     AddMembersIn,
+    DiscoverChannelsOut,
+    DiscussionLinkIn,
     GroupCreate,
     GroupJoinRequestOut,
     GroupMemberOut,
     GroupMessageCreate,
+    GroupMessageEditIn,
     GroupMessageOut,
     GroupMessageReactIn,
     GroupOut,
@@ -70,6 +73,20 @@ async def list_live_channels(current_user: CurrentUser, db: DbSession):
     return await channel_live_service.list_live(db, current_user)
 
 
+@router.get("/discover", response_model=DiscoverChannelsOut)
+async def discover_channels(
+    current_user: CurrentUser,
+    db: DbSession,
+    category: str | None = Query(None),
+    query: str | None = Query(None, max_length=120),
+):
+    """Annuaire des chaînes publiques — découvrables sans invitation."""
+    items = await group_service.list_public_channels(
+        db, current_user, category=category, query=query
+    )
+    return DiscoverChannelsOut(items=items, next_cursor=None)
+
+
 @router.get("/{group_id}", response_model=GroupOut)
 async def get_one(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
     return await group_service.get_group(db, current_user, group_id)
@@ -91,6 +108,19 @@ async def delete_group(group_id: uuid.UUID, current_user: CurrentUser, db: DbSes
 @router.post("/{group_id}/invite/reset", response_model=GroupOut)
 async def reset_invite(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
     return await group_service.reset_invite_code(db, current_user, group_id)
+
+
+@router.post("/{group_id}/discussion", response_model=GroupOut)
+async def link_discussion(
+    group_id: uuid.UUID, body: DiscussionLinkIn, current_user: CurrentUser, db: DbSession
+):
+    """Lie un canal de discussion (existant ou nouveau) à cette chaîne."""
+    return await group_service.link_discussion(db, current_user, group_id, body)
+
+
+@router.delete("/{group_id}/discussion", response_model=GroupOut)
+async def unlink_discussion(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    return await group_service.unlink_discussion(db, current_user, group_id)
 
 
 @router.get("/{group_id}/members", response_model=list[GroupMemberOut])
@@ -215,6 +245,30 @@ async def react_to_message(
     return await group_service.react_to_message(
         db, current_user, group_id, message_id, body.emoji
     )
+
+
+@router.patch("/{group_id}/messages/{message_id}", response_model=GroupMessageOut)
+async def edit_message(
+    group_id: uuid.UUID,
+    message_id: uuid.UUID,
+    body: GroupMessageEditIn,
+    current_user: CurrentUser,
+    db: DbSession,
+):
+    return await group_service.edit_message(
+        db, current_user, group_id, message_id, body.body
+    )
+
+
+@router.delete("/{group_id}/messages/{message_id}", response_model=Message)
+async def delete_message(
+    group_id: uuid.UUID,
+    message_id: uuid.UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+):
+    await group_service.delete_message(db, current_user, group_id, message_id)
+    return Message(message="deleted")
 
 
 @router.put("/{group_id}/read", response_model=Message)

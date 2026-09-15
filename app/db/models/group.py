@@ -120,6 +120,19 @@ class Group(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # reglage restaure l'affichage du nom de l'admin qui a publie.
     sign_messages: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # CHAINE uniquement : canal de discussion lie (facon Telegram) — un
+    # second Group (kind='channel') ou les abonnes peuvent commenter les
+    # publications. Auto-reference sur `groups`, jamais obligatoire.
+    discussion_group_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("groups.id", ondelete="SET NULL"), index=True
+    )
+
+    # CHAINE uniquement : abonnement payant — structure de donnees seulement,
+    # aucun encaissement reel pour l'instant (pas de prestataire branche).
+    is_paid: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    subscription_price_cents: Mapped[int | None] = mapped_column(Integer)
+    subscription_currency: Mapped[str | None] = mapped_column(String(3))
+
     last_message_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), index=True
     )
@@ -173,12 +186,18 @@ class GroupMessage(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     sender_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
     )
-    # 'text' | 'image' | 'video' | 'system' (arrivee/depart d'un membre…)
+    # 'text' | 'image' | 'video' | 'voice' | 'file' | 'system' (arrivee/depart
+    # d'un membre…)
     type: Mapped[str] = mapped_column(String(16), default="text", nullable=False)
     body: Mapped[str] = mapped_column(Text, default="", nullable=False)
     attachment_url: Mapped[str | None] = mapped_column(String(1024))
     attachment_meta: Mapped[dict | None] = mapped_column(JSONB)
     client_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    # id du message d'origine si celui-ci est un TRANSFERT (façon WhatsApp) —
+    # volontairement pas de ForeignKey : l'origine peut être un message 1-1
+    # OU un autre message de groupe, jamais affichée/résolue côté UI (juste
+    # un badge "Transféré"), donc pas besoin de contrainte référentielle.
+    forwarded_from_id: Mapped[uuid.UUID | None] = mapped_column(GUID())
 
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

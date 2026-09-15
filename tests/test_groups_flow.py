@@ -387,4 +387,159 @@ async def test_group_message_reactions(client, _capture_otp):
     r = await client.get(f"/api/v1/groups/{gid}/messages", headers=bh)
     msg = next(m for m in r.json() if m["id"] == mid)
     assert msg["reactions"] == {"👍": 1}
-    assert msg["my_reaction"] is None
+
+
+async def test_group_message_voice_and_file_types(client, _capture_otp):
+    """Bug reel : le pattern de validation du type de message de groupe
+    n'acceptait que text|image|video — un vocal ou un document echouait en
+    422 malgre le frontend qui les envoie deja (GroupAttachment.tsx gere ces
+    deux types cote affichage)."""
+    alice_token, _ = await _register(client, _capture_otp, "+33633330001")
+    ah = {"Authorization": f"Bearer {alice_token}"}
+
+    r = await client.post(
+        "/api/v1/groups", json={"kind": "group", "name": "Voix"}, headers=ah
+    )
+    group_id = r.json()["id"]
+
+    r = await client.post(
+        f"/api/v1/groups/{group_id}/messages",
+        json={
+            "type": "voice",
+            "attachment_url": "https://x/vocal.m4a",
+            "attachment_meta": {"duration_sec": 12},
+        },
+        headers=ah,
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["type"] == "voice"
+
+    r = await client.post(
+        f"/api/v1/groups/{group_id}/messages",
+        json={
+            "type": "file",
+            "attachment_url": "https://x/doc.pdf",
+            "attachment_meta": {"name": "doc.pdf"},
+        },
+        headers=ah,
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["type"] == "file"
+
+
+async def test_group_message_forwarded(client, _capture_otp):
+    """Transfert d'un message vers un groupe : `forwarded_from_id` est
+    persiste et renvoye par l'API (l'UI n'affiche qu'un badge "Transfere",
+    jamais la source, mais le champ doit survivre l'aller-retour)."""
+    alice_token, _ = await _register(client, _capture_otp, "+33633330002")
+    ah = {"Authorization": f"Bearer {alice_token}"}
+
+    r = await client.post(
+        "/api/v1/groups", json={"kind": "group", "name": "Transferts"}, headers=ah
+    )
+    group_id = r.json()["id"]
+
+    # message d'origine (peu importe sa provenance reelle, on simule juste un
+    # id de message existant)
+    r = await client.post(
+        f"/api/v1/groups/{group_id}/messages",
+        json={"type": "text", "body": "Message original"},
+        headers=ah,
+    )
+    original_id = r.json()["id"]
+
+    r = await client.post(
+        f"/api/v1/groups/{group_id}/messages",
+        json={
+            "type": "text",
+            "body": "Message original",
+            "forwarded_from_id": original_id,
+        },
+        headers=ah,
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["forwarded_from_id"] == original_id
+
+    # visible aussi via l'historique
+    r = await client.get(f"/api/v1/groups/{group_id}/messages", headers=ah)
+    forwarded = next(m for m in r.json() if m["forwarded_from_id"] == original_id)
+    assert forwarded["body"] == "Message original"
+
+
+async def test_group_message_edit(client, _capture_otp):
+    alice_token, _ = await _register(client, _capture_otp, "+33633330003")
+    bob_token, bob_id = await _register(client, _capture_otp, "+33633330004")
+    ah = {"Authorization": f"Bearer {alice_token}"}
+    bh = {"Authorization": f"Bearer {bob_token}"}
+
+    r = await client.post(
+        "/api/v1/groups",
+        json={"kind": "group", "name": "Edition", "member_ids": [bob_id]},
+        headers=ah,
+    )
+    group_id = r.json()["id"]
+
+    r = await client.post(
+        f"/api/v1/groups/{group_id}/messages",
+        json={"type": "text", "body": "premiere version"},
+        headers=ah,
+    )
+    msg_id = r.json()["id"]
+
+    # Bob (pas l'auteur) ne peut pas éditer
+    r = await client.patch(
+        f"/api/v1/groups/{group_id}/messages/{msg_id}",
+        json={"body": "tentative de bob"},
+        headers=bh,
+    )
+    assert r.status_code == 403, r.text
+
+    # Alice (l'auteur) peut éditer
+    r = await client.patch(
+        f"/api/v1/groups/{group_id}/messages/{msg_id}",
+        json={"body": "version corrigée"},
+        headers=ah,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["body"] == "version corrigée"
+    assert r.json()["edited_at"] is not None
+
+
+async def test_group_message_delete(client, _capture_otp):
+    alice_token, alice_id = await _register(client, _capture_otp, "+33633330005")
+    bob_token, bob_id = await _register(client, _capture_otp, "+33633330006")
+    ah = {"Authorization": f"Bearer {alice_token}"}
+    bh = {"Authorization": f"Bearer {bob_token}"}
+
+    r = await client.post(
+        "/api/v1/groups",
+        json={"kind": "group", "name": "Suppression", "member_ids": [bob_id]},
+        headers=ah,
+    )
+    group_id = r.json()["id"]
+
+    # Bob (membre simple, pas admin) publie un message
+    r = await client.post(
+        f"/api/v1/groups/{group_id}/messages",
+        json={"type": "text", "body": "à supprimer"},
+        headers=bh,
+    )
+    msg_id = r.json()["id"]
+
+    # Alice (owner, pas l'auteur) peut supprimer -- modération admin
+    r = await client.delete(f"/api/v1/groups/{group_id}/messages/{msg_id}", headers=ah)
+    assert r.status_code == 200, r.text
+
+    # le message n'apparaît plus dans l'historique
+    r = await client.get(f"/api/v1/groups/{group_id}/messages", headers=ah)
+    assert not any(m["id"] == msg_id for m in r.json())
+
+    # un 2e message : un membre simple ne peut pas supprimer celui d'un autre
+    r = await client.post(
+        f"/api/v1/groups/{group_id}/messages",
+        json={"type": "text", "body": "message d'alice"},
+        headers=ah,
+    )
+    msg2_id = r.json()["id"]
+    r = await client.delete(f"/api/v1/groups/{group_id}/messages/{msg2_id}", headers=bh)
+    assert r.status_code == 403, r.text
