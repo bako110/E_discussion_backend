@@ -121,15 +121,15 @@ async def decline_request(db: AsyncSession, me: User, partner_id: uuid.UUID) -> 
         await db.flush()
 
 
-async def reopen_declined_request(db: AsyncSession, requester_id: uuid.UUID, target_id: uuid.UUID) -> None:
-    """Un refus est reversible : si le demandeur original renvoie un message
-    apres un `declined`, la demande redevient `pending` plutot que de rester
-    bloquee a vie (aucune notification au destinataire a ce stade — seule une
-    nouvelle demande explicite, silencieuse comme la premiere)."""
+async def retry_request(db: AsyncSession, me: User, partner_id: uuid.UUID) -> None:
+    """Un refus est reversible, mais explicitement : seul le demandeur
+    original peut relancer une demande refusee (bouton « Redemander » cote
+    UI, apres l'erreur `request_declined` sur l'envoi). Remet `pending` sans
+    notifier le destinataire — silencieux comme la premiere demande."""
     res = await db.execute(
         select(ConversationRequest).where(
-            ConversationRequest.requester_id == requester_id,
-            ConversationRequest.target_id == target_id,
+            ConversationRequest.requester_id == me.id,
+            ConversationRequest.target_id == partner_id,
         )
     )
     req = res.scalar_one_or_none()

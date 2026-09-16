@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import and_, desc, or_, select
+from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, ForbiddenError, NotFoundError
@@ -105,19 +105,10 @@ async def send(
     if await user_service.is_blocked_between(db, me.id, partner_id):
         raise ForbiddenError("conversation.blocked", code="blocked")
 
-    # demande refusee -> reversible : si c'est l'initiateur original qui
-    # reecrit, on relance une nouvelle demande (silencieuse) plutot que de le
-    # bloquer a vie ; en attente -> l'initiateur peut ecrire, la cible non
-    # (tant qu'elle n'a pas accepte, elle ne devrait pas repondre)
-    status = await conversation_service.request_status(db, me.id, partner_id)
-    if status == "declined":
-        await conversation_service.reopen_declined_request(db, me.id, partner_id)
-
-    if data.type == MessageType.text and not data.body.strip() and not data.attachment_url:
-        raise AppError("errors.validation", status_code=422, code="empty_message")
-
     # Idempotence : rejeu de l'outbox apres reconnexion -> renvoyer le message
-    # deja cree pour ce client_id au lieu d'un doublon.
+    # deja cree pour ce client_id au lieu d'un doublon. AVANT les controles de
+    # demande ci-dessous : un retry ne doit jamais etre compte comme un
+    # nouvel essai (ni faire echouer sur la limite des 3 messages).
     if data.client_id:
         existing = await db.execute(
             select(Message).where(
@@ -129,6 +120,33 @@ async def send(
             return await _serialize(
                 db, dup, viewer_id=me.id, viewer_read_receipts=me.read_receipts
             )
+
+    # demande refusee -> reversible, mais pas silencieux : l'initiateur voit
+    # une erreur explicite lui disant d'attendre l'acceptation, plutot que de
+    # relancer une nouvelle demande a son insu a chaque tentative.
+    status = await conversation_service.request_status(db, me.id, partner_id)
+    if status == "declined":
+        raise ForbiddenError("conversation.request_declined", code="request_declined")
+
+    # demande en attente (je suis l'initiateur, l'autre n'a pas encore
+    # repondu) -> maximum 3 messages avant reponse, pour eviter le spam d'un
+    # inconnu ; au-dela, il doit attendre l'acceptation pour continuer.
+    if status == "pending_outgoing":
+        count_res = await db.execute(
+            select(func.count(Message.id)).where(
+                Message.conversation_id == conv.id,
+                Message.sender_id == me.id,
+                Message.deleted_at.is_(None),
+            )
+        )
+        sent_count = count_res.scalar_one()
+        if sent_count >= 3:
+            raise ForbiddenError(
+                "conversation.request_limit_reached", code="request_limit_reached"
+            )
+
+    if data.type == MessageType.text and not data.body.strip() and not data.attachment_url:
+        raise AppError("errors.validation", status_code=422, code="empty_message")
 
     msg = Message(
         conversation_id=conv.id,

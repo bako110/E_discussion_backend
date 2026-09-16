@@ -52,6 +52,15 @@ async def decline(conversation_id: uuid.UUID, current_user: CurrentUser, db: DbS
     return Message(message="declined")
 
 
+@router.post("/{conversation_id}/retry", response_model=Message)
+async def retry(conversation_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    """Relance explicitement une demande refusee — seul le demandeur
+    original peut l'appeler (voir `retry_request`)."""
+    detail = await conversation_service.detail(db, current_user, conversation_id)
+    await conversation_service.retry_request(db, current_user, detail.partner.id)
+    return Message(message="pending")
+
+
 @router.post("/{conversation_id}/mute", response_model=Message)
 async def mute(conversation_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
     await conversation_service.set_mute(db, current_user, conversation_id, True)
