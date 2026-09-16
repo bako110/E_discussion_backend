@@ -284,10 +284,15 @@ async def update_group(
 
 # ── lecture ────────────────────────────────────────────────────────────────
 async def my_groups(db: AsyncSession, me: User, kind: GroupKind | None = None) -> list[GroupOut]:
+    # un canal de discussion (lié à une chaîne via ChannelDiscussion) n'est
+    # pas une chaîne de premier niveau — il ne doit apparaître que depuis
+    # l'intérieur de sa chaîne parente (voir list_discussions), jamais
+    # mélangé à la liste principale des groupes/chaînes de l'utilisateur.
+    discussion_ids = select(ChannelDiscussion.discussion_group_id)
     q = (
         select(Group)
         .join(GroupMember, GroupMember.group_id == Group.id)
-        .where(GroupMember.user_id == me.id)
+        .where(GroupMember.user_id == me.id, Group.id.not_in(discussion_ids))
     )
     if kind is not None:
         q = q.where(Group.kind == kind)
@@ -333,7 +338,12 @@ async def list_public_channels(
     limit: int = 20,
 ) -> list[GroupPreview]:
     """Annuaire des chaines publiques — decouverte sans invitation ni contact
-    commun. Triees par nombre de membres decroissant."""
+    commun. Triees par nombre de membres decroissant.
+
+    Exclut les canaux de discussion (lies a une chaine via ChannelDiscussion,
+    voir MAX_DISCUSSION_CHANNELS) : meme publics, ils ne sont accessibles que
+    depuis l'interieur de leur chaine parente, jamais comme entree autonome
+    de l'annuaire."""
     member_count_col = (
         select(func.count())
         .select_from(GroupMember)
@@ -341,9 +351,14 @@ async def list_public_channels(
         .correlate(Group)
         .scalar_subquery()
     )
+    discussion_ids = select(ChannelDiscussion.discussion_group_id)
     q = (
         select(Group, member_count_col.label("member_count"))
-        .where(Group.kind == GroupKind.channel, Group.is_public.is_(True))
+        .where(
+            Group.kind == GroupKind.channel,
+            Group.is_public.is_(True),
+            Group.id.not_in(discussion_ids),
+        )
     )
     if category:
         q = q.where(Group.category == category)
