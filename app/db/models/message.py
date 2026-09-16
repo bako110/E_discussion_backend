@@ -67,6 +67,15 @@ class Message(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     attachment_url: Mapped[str | None] = mapped_column(String(1024))
     attachment_meta: Mapped[dict | None] = mapped_column(JSONB)
 
+    # Vue unique (photo/video/vocal/fichier, facon WhatsApp) : le destinataire
+    # ne peut ouvrir la piece jointe qu'UNE fois. A l'ouverture (voir
+    # message_service.consume_view_once), `attachment_url`/`attachment_meta`
+    # sont definitivement effaces cote serveur (fichier physique supprime) et
+    # `view_once_opened_at` est horodate — la bulle devient une trace grisee
+    # "Photo/Video/Vocal/Fichier consulte(e)" sans plus jamais servir le media.
+    view_once: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    view_once_opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     reply_to_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
         ForeignKey("messages.id", ondelete="SET NULL"),

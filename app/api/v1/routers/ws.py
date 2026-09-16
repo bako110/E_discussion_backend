@@ -4,8 +4,16 @@ Auth : le client envoie en premier message JSON `{"type":"auth","token":"<jwt>"}
 Ensuite le serveur pousse les events (message.new, receipt.*, typing.*,
 presence.update, ...). Le client peut envoyer :
   {"type":"ping"}                                   -> {"type":"pong"} + refresh presence
+  {"type":"app.foreground"}                         -> "en ligne" pour les partenaires
+  {"type":"app.background"}                         -> plus "en ligne" (socket reste ouverte)
   {"type":"typing","conversation_id":"...","state":"start|stop"}
   {"type":"delivered","message_id":"..."}
+
+`app.foreground`/`app.background` existent car un service natif Android
+maintient le process (et donc cette socket + son ping) vivant meme app en
+arriere-plan, pour ne pas rater d'appels/notifications sous certains OEM
+(Infinix/Tecno/Transsion). Sans cette distinction, "en ligne" resterait vrai
+indefiniment tant que l'OS ne tue pas le process — voir `app/db/redis.py`.
 """
 from __future__ import annotations
 
@@ -21,7 +29,7 @@ from sqlalchemy import update
 from app.core.logging import get_logger
 from app.core.security import decode_token
 from app.db.models.user import User
-from app.db.redis import mark_online
+from app.db.redis import mark_background, mark_foreground, mark_online
 from app.db.session import AsyncSessionLocal
 from app.services import message_service
 from app.services.conversation_service import get_owned
@@ -103,6 +111,21 @@ async def _handle_client_event(user_id: str, data: dict) -> None:
     if kind == "ping":
         await mark_online(user_id)
         await manager.send_to_user(user_id, {"type": "pong"})
+        return
+
+    if kind == "app.foreground":
+        # app visible au premier plan -> "en ligne" pour les partenaires.
+        # Distinct du ping : le process peut tourner (et pinguer) en
+        # arriere-plan sans que l'utilisateur soit reellement present.
+        await mark_foreground(user_id)
+        await manager.publish_presence(user_id, online=True)
+        return
+
+    if kind == "app.background":
+        # app repassee en arriere-plan -> plus "en ligne", meme si la
+        # connexion WS reste active (notifications/appels toujours recus).
+        await mark_background(user_id)
+        await manager.publish_presence(user_id, online=False)
         return
 
     if kind == "typing":

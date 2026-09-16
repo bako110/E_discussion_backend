@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from fastapi import WebSocket
 
 from app.core.logging import get_logger
-from app.db.redis import get_redis, mark_offline, mark_online
+from app.db.redis import get_redis, mark_background, mark_offline, mark_online
 
 log = get_logger(__name__)
 
@@ -56,6 +56,9 @@ class WsManager:
                 self._local.pop(user_id, None)
         if not still_here:
             await mark_offline(user_id)
+            # evite un residu `fg:{id}` qui survivrait jusqu'a son propre TTL
+            # apres une deconnexion propre (derniere socket de l'utilisateur).
+            await mark_background(user_id)
             await self.publish_presence(user_id, online=False)
 
     # ── envoi ──────────────────────────────────────────────────────────

@@ -22,9 +22,13 @@ from app.db.models.message import (
 )
 from app.db.models.user import User
 from app.schemas.conversation import MessageCreate, MessageOut, ReplyPreview
-from app.services import conversation_service, user_service
+from app.services import conversation_service, media_service, user_service
 from app.services.push_service import push_to_user
 from app.services.ws_manager import manager
+
+# Types de piece jointe pouvant etre envoyes en "vue unique" (facon
+# WhatsApp) — le texte et la localisation en sont exclus.
+_VIEW_ONCE_TYPES = {MessageType.image, MessageType.video, MessageType.voice, MessageType.file}
 
 # Fenetre d'edition tres large (demande produit : editer un message meme
 # apres 24h). On garde une limite haute pour eviter la reecriture
@@ -88,6 +92,7 @@ async def _serialize(
     out.delivered = delivered
     out.read = read
     out.played = played
+    out.view_once_opened = m.view_once_opened_at is not None
     return out
 
 
@@ -100,11 +105,13 @@ async def send(
     if await user_service.is_blocked_between(db, me.id, partner_id):
         raise ForbiddenError("conversation.blocked", code="blocked")
 
-    # demande refusee -> interdit ; en attente -> l'initiateur peut ecrire,
-    # la cible non (tant qu'elle n'a pas accepte, elle ne devrait pas repondre)
+    # demande refusee -> reversible : si c'est l'initiateur original qui
+    # reecrit, on relance une nouvelle demande (silencieuse) plutot que de le
+    # bloquer a vie ; en attente -> l'initiateur peut ecrire, la cible non
+    # (tant qu'elle n'a pas accepte, elle ne devrait pas repondre)
     status = await conversation_service.request_status(db, me.id, partner_id)
     if status == "declined":
-        raise ForbiddenError("conversation.blocked", code="request_declined")
+        await conversation_service.reopen_declined_request(db, me.id, partner_id)
 
     if data.type == MessageType.text and not data.body.strip() and not data.attachment_url:
         raise AppError("errors.validation", status_code=422, code="empty_message")
@@ -134,6 +141,9 @@ async def send(
         reply_to_id=data.reply_to_id,
         forwarded_from_id=data.forwarded_from_id,
         client_id=data.client_id,
+        # vue unique : ignore silencieusement pour un type non pris en charge
+        # (texte/localisation) plutot que de rejeter l'envoi.
+        view_once=bool(data.view_once and data.type in _VIEW_ONCE_TYPES and data.attachment_url),
     )
     db.add(msg)
     conv.last_message_at = datetime.now(UTC)
@@ -195,6 +205,11 @@ async def history(
             (Message.created_at > since)
             | (Message.edited_at > since)
             | (Message.deleted_at > since)
+            # vue unique ouverte APRÈS `since` mais envoyée avant : sans cette
+            # condition, l'expéditeur ne recevait la bulle "consulté(e)" QUE
+            # via le WS temps réel — jamais rattrapée par le pull delta si
+            # son chat/app était fermé au moment de l'ouverture (WS manqué).
+            | (Message.view_once_opened_at > since)
         ).order_by(Message.created_at)
     else:
         stmt = stmt.order_by(desc(Message.created_at)).offset(offset).limit(limit)
@@ -343,6 +358,44 @@ async def mark_played(db: AsyncSession, me: User, message_id: uuid.UUID) -> None
                 "message_id": str(message_id),
             },
         )
+
+
+async def consume_view_once(db: AsyncSession, me: User, message_id: uuid.UUID) -> None:
+    """Le destinataire vient d'OUVRIR une piece jointe vue-unique. Efface
+    definitivement le fichier (disque + `attachment_url`/`attachment_meta`)
+    et previent l'expediteur (WS `message.view_once_opened`) pour qu'il
+    affiche la bulle grisee "consulte(e)" chez lui aussi. Idempotent : une
+    2e tentative (retry offline, double-tap) ne fait rien de plus."""
+    msg = await db.get(Message, message_id)
+    if msg is None or msg.deleted_at is not None:
+        raise NotFoundError("message.not_found", code="message_not_found")
+    if not msg.view_once:
+        raise AppError("message.not_view_once", status_code=422, code="not_view_once")
+    if msg.sender_id == me.id:
+        return  # l'expediteur ne "consomme" pas son propre envoi
+    # le lecteur doit appartenir a la conversation
+    await conversation_service.get_owned(db, me, msg.conversation_id)
+
+    if msg.view_once_opened_at is not None:
+        return  # deja consomme (retry idempotent)
+
+    media_service.delete_by_url(msg.attachment_url)
+    thumb = (msg.attachment_meta or {}).get("thumbnail_url") if msg.attachment_meta else None
+    media_service.delete_by_url(thumb)
+
+    msg.view_once_opened_at = datetime.now(UTC)
+    msg.attachment_url = None
+    msg.attachment_meta = None
+    await db.flush()
+
+    await manager.send_to_user(
+        str(msg.sender_id),
+        {
+            "type": "message.view_once_opened",
+            "conversation_id": str(msg.conversation_id),
+            "message_id": str(message_id),
+        },
+    )
 
 
 async def message_info(db: AsyncSession, me: User, message_id: uuid.UUID) -> dict:

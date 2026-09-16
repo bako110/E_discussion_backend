@@ -124,6 +124,26 @@ def _public_url(rel_path: str) -> str:
     return f"{base}{path}" if base else path
 
 
+def delete_by_url(url: str | None) -> None:
+    """Supprime physiquement le fichier reference par une URL publique
+    generee par `_public_url()` (ex: message vue-unique consomme). Best-effort
+    — une URL deja invalide/hors racine est simplement ignoree, jamais levee."""
+    if not url:
+        return
+    base = settings.MEDIA_PUBLIC_BASE.rstrip("/")
+    prefix = settings.MEDIA_URL_PREFIX.rstrip("/")
+    path = url[len(base):] if base and url.startswith(base) else url
+    if not path.startswith(prefix + "/"):
+        return
+    rel = path[len(prefix) + 1:]
+    try:
+        target = (_root() / rel).resolve()
+        if _root().resolve() in target.parents and target.exists():
+            target.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def _categorize(ext: str, content_type: str | None) -> str:
     ext = ext.lower()
     if ext in _IMAGE_EXT:

@@ -223,6 +223,14 @@ async def close_redis() -> None:
 
 # ── Presence helpers ────────────────────────────────────────────────────────
 PRESENCE_TTL = 60  # secondes — le client WS ping toutes les ~30s
+# Foreground : distinct de la presence WS brute — un service natif Android
+# maintient le process (et donc la socket + son ping) vivant meme app en
+# arriere-plan, pour ne pas rater d'appels/notifications sous certains OEM.
+# Sans cette distinction, un utilisateur reste "en ligne" indefiniment tant
+# que l'OS ne tue pas le process. Le TTL (> intervalle de ping normal, 25s)
+# n'est qu'un filet de securite si l'app est tuee brutalement sans passer
+# par l'event explicite `app.background`.
+FOREGROUND_TTL = 90  # secondes
 
 
 async def mark_online(user_id: str) -> None:
@@ -233,8 +241,27 @@ async def mark_offline(user_id: str) -> None:
     await get_redis().delete(f"presence:{user_id}")
 
 
+async def mark_foreground(user_id: str) -> None:
+    await get_redis().set(f"fg:{user_id}", "1", ex=FOREGROUND_TTL)
+
+
+async def mark_background(user_id: str) -> None:
+    await get_redis().delete(f"fg:{user_id}")
+
+
+async def is_foreground(user_id: str) -> bool:
+    return await get_redis().exists(f"fg:{user_id}") == 1
+
+
 async def is_online(user_id: str) -> bool:
-    return await get_redis().exists(f"presence:{user_id}") == 1
+    """« En ligne » = connexion WS active ET app au premier plan — pas juste
+    le process qui tourne en arriere-plan (voir `FOREGROUND_TTL` ci-dessus)."""
+    r = get_redis()
+    pipe = r.pipeline()
+    pipe.exists(f"presence:{user_id}")
+    pipe.exists(f"fg:{user_id}")
+    connected, foreground = await pipe.execute()
+    return bool(connected) and bool(foreground)
 
 
 async def filter_online(user_ids: list[str]) -> set[str]:
@@ -244,5 +271,11 @@ async def filter_online(user_ids: list[str]) -> set[str]:
     pipe = r.pipeline()
     for uid in user_ids:
         pipe.exists(f"presence:{uid}")
+        pipe.exists(f"fg:{uid}")
     results = await pipe.execute()
-    return {uid for uid, present in zip(user_ids, results, strict=True) if present}
+    out: set[str] = set()
+    for i, uid in enumerate(user_ids):
+        connected, foreground = results[2 * i], results[2 * i + 1]
+        if connected and foreground:
+            out.add(uid)
+    return out

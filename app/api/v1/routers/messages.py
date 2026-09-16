@@ -55,6 +55,14 @@ async def ack_played(message_id: uuid.UUID, current_user: CurrentUser, db: DbSes
     return Message(message="ok")
 
 
+@router.post("/{message_id}/view-once/open", response_model=Message)
+async def open_view_once(message_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    """Le destinataire vient d'ouvrir une piece jointe vue-unique — efface
+    definitivement le fichier cote serveur (facon WhatsApp)."""
+    await message_service.consume_view_once(db, current_user, message_id)
+    return Message(message="ok")
+
+
 @router.get("/{message_id}/info", response_model=MessageInfoOut)
 async def message_info(message_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
     """Ecran « Infos » (expediteur uniquement) : horodatages du destinataire."""

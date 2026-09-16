@@ -39,6 +39,12 @@ class MessageOut(ORMModel):
     delivered: bool = False
     read: bool = False
     played: bool = False                    # vocal ecoute / video ouverte (dest)
+    # vue unique (photo/video/vocal/fichier) : true tant que non ouverte par
+    # le destinataire. Une fois ouverte, `attachment_url`/`attachment_meta`
+    # sont deja effaces par le backend (voir consume_view_once) — le client
+    # affiche alors la bulle "grisee" a partir de `view_once_opened`.
+    view_once: bool = False
+    view_once_opened: bool = False
     edited_at: datetime | None
     deleted_at: datetime | None
     created_at: datetime
@@ -52,6 +58,8 @@ class MessageCreate(BaseModel):
     attachment_meta: dict | None = None
     reply_to_id: uuid.UUID | None = None
     forwarded_from_id: uuid.UUID | None = None
+    # Vue unique — uniquement pertinent pour type in {image, video, voice, file}.
+    view_once: bool = False
     # Idempotence offline : si un message avec ce client_id existe deja dans
     # la conversation, le backend le renvoie tel quel au lieu d'en creer un
     # doublon (rejeu de l'outbox apres reconnexion).
