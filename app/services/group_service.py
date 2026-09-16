@@ -191,6 +191,7 @@ async def _serialize_group(
             )
         )
         out.discussion_group_ids = [r[0] for r in rows.all()]
+        out.parent_channel_id = await _parent_channel_id(db, group.id)
     return out
 
 
@@ -597,6 +598,17 @@ async def _require_admin(
     return group, mem
 
 
+async def _parent_channel_id(db: AsyncSession, group_id: uuid.UUID) -> uuid.UUID | None:
+    """Si `group_id` est un canal de discussion lié, renvoie l'id de sa
+    chaîne parente — sinon None (groupe normal, chaîne racine, ou canal non
+    lié). `discussion_group_id` est unique : au plus une chaîne parente."""
+    return await db.scalar(
+        select(ChannelDiscussion.channel_id).where(
+            ChannelDiscussion.discussion_group_id == group_id
+        )
+    )
+
+
 async def add_members(
     db: AsyncSession, me: User, group_id: uuid.UUID, user_ids: list[uuid.UUID]
 ) -> list[GroupMemberOut]:
@@ -607,8 +619,20 @@ async def add_members(
     base_role = (
         GroupRole.subscriber if group.kind == GroupKind.channel else GroupRole.member
     )
+    # un canal de discussion lié n'accepte que les abonnés de sa chaîne
+    # parente — on ne peut pas y ajouter n'importe quel contact.
+    parent_id = await _parent_channel_id(db, group_id)
+    parent_member_ids: set[uuid.UUID] | None = None
+    if parent_id is not None:
+        rows = await db.execute(
+            select(GroupMember.user_id).where(GroupMember.group_id == parent_id)
+        )
+        parent_member_ids = {uid for (uid,) in rows.all()}
+
     added: list[uuid.UUID] = []
     for uid in user_ids:
+        if parent_member_ids is not None and uid not in parent_member_ids:
+            continue
         if await _membership(db, group_id, uid) is not None:
             continue
         target = await db.get(User, uid)
@@ -715,6 +739,53 @@ async def list_discussions(
         count = await _member_count(db, g.id)
         out.append(
             DiscussionChannelOut(id=g.id, name=g.name, avatar_url=g.avatar_url, member_count=count)
+        )
+    return out
+
+
+async def list_my_linked_channels(
+    db: AsyncSession, me: User, group_id: uuid.UUID
+) -> list[DiscussionChannelOut]:
+    """Depuis N'IMPORTE quel Group de la famille (la chaîne racine OU l'un de
+    ses canaux liés), renvoie la chaîne + tous les canaux liés DONT JE SUIS
+    MEMBRE — pour le sélecteur « N canaux » dans le header de discussion.
+    Renvoie une liste vide si je ne suis dans aucun canal (juste la chaîne
+    seule ne suffit pas à afficher le sélecteur, voir le frontend)."""
+    channel_id = await _parent_channel_id(db, group_id) or group_id
+    channel = await db.get(Group, channel_id)
+    if channel is None or channel.kind != GroupKind.channel:
+        return []
+
+    discussion_ids = (
+        await db.execute(
+            select(ChannelDiscussion.discussion_group_id).where(
+                ChannelDiscussion.channel_id == channel_id
+            )
+        )
+    ).scalars().all()
+
+    candidate_ids = [channel_id, *discussion_ids]
+    member_rows = await db.execute(
+        select(GroupMember.group_id).where(
+            GroupMember.user_id == me.id, GroupMember.group_id.in_(candidate_ids)
+        )
+    )
+    my_ids = {gid for (gid,) in member_rows.all()}
+    if len(my_ids) <= 1:
+        return []  # dans un seul élément de la famille (ou aucun) -> rien à choisir
+
+    out: list[DiscussionChannelOut] = []
+    for gid in candidate_ids:
+        if gid not in my_ids:
+            continue
+        g = channel if gid == channel_id else await db.get(Group, gid)
+        if g is None:
+            continue
+        count = await _member_count(db, g.id)
+        out.append(
+            DiscussionChannelOut(
+                id=g.id, name=g.name, avatar_url=g.avatar_url, member_count=count, kind=g.kind
+            )
         )
     return out
 

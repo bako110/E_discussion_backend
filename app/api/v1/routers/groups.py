@@ -137,6 +137,14 @@ async def unlink_discussion(
     return await group_service.unlink_discussion(db, current_user, group_id, discussion_group_id)
 
 
+@router.get("/{group_id}/discussion/mine", response_model=list[DiscussionChannelOut])
+async def list_my_linked_channels(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    """Depuis la chaîne OU l'un de ses canaux, la chaîne + les canaux liés
+    DONT JE SUIS MEMBRE — pour le sélecteur « N canaux » du header de
+    discussion. Vide si je ne suis membre que d'un seul élément."""
+    return await group_service.list_my_linked_channels(db, current_user, group_id)
+
+
 @router.get("/{group_id}/members", response_model=list[GroupMemberOut])
 async def get_members(group_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
     return await group_service.members(db, current_user, group_id)

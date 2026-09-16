@@ -110,6 +110,9 @@ class GroupOut(ORMModel):
     category: str | None = None
     # chaîne uniquement : canaux de discussion liés (jusqu'à MAX_DISCUSSION_CHANNELS)
     discussion_group_ids: list[uuid.UUID] = Field(default_factory=list)
+    # canal de discussion uniquement : id de la chaîne parente (sens inverse
+    # de discussion_group_ids) — None si ce groupe n'est pas un canal lié.
+    parent_channel_id: uuid.UUID | None = None
     created_at: datetime
     last_message_at: datetime | None = None
 
@@ -182,6 +185,9 @@ class DiscussionChannelOut(ORMModel):
     name: str
     avatar_url: str | None = None
     member_count: int = 0
+    # présent dans list_my_linked_channels (chaîne + canaux frères dont je
+    # suis membre) — absent dans list_discussions (toujours des canaux).
+    kind: GroupKind | None = None
 
 
 class GroupMessageCreate(BaseModel):
