@@ -200,7 +200,13 @@ async def unhide(db: AsyncSession, me: User, conversation_id: uuid.UUID) -> None
         await db.flush()
 
 
-async def list_summaries(db: AsyncSession, me: User) -> list[ConversationSummary]:
+async def list_summaries(
+    db: AsyncSession, me: User, *, offset: int = 0, limit: int | None = None
+) -> list[ConversationSummary]:
+    """`offset`/`limit` sont optionnels (compat ascendante : les appelants qui
+    ne les passent pas recoivent la liste complete comme avant). Le tri +
+    filtrage « masquees » doit se faire AVANT la pagination (cf. `_is_visible`
+    qui depend de `last_message_at`, non filtrable en SQL simplement ici)."""
     res = await db.execute(
         select(Conversation).where(
             or_(Conversation.user_a_id == me.id, Conversation.user_b_id == me.id)
@@ -234,6 +240,11 @@ async def list_summaries(db: AsyncSession, me: User) -> list[ConversationSummary
     )
     if not convs:
         return []
+
+    if limit is not None:
+        convs = convs[offset : offset + limit]
+        if not convs:
+            return []
 
     partner_ids = [await _partner_of(c, me.id) for c in convs]
     partners = {

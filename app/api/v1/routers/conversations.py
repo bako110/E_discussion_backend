@@ -23,8 +23,23 @@ router = APIRouter()
 
 
 @router.get("", response_model=list[ConversationSummary])
-async def list_conversations(current_user: CurrentUser, db: DbSession):
-    return await conversation_service.list_summaries(db, current_user)
+async def list_conversations(
+    current_user: CurrentUser,
+    db: DbSession,
+    page: int | None = Query(None, ge=1),
+    limit: int | None = Query(None, ge=1, le=200),
+):
+    # `page`/`limit` optionnels : un appelant qui ne les passe pas (anciens
+    # clients, ou usages internes comme le pull delta / la recherche de
+    # contacts existants) recoit toujours la liste complete, comme avant —
+    # seul un appelant qui demande explicitement une page est paginé.
+    if page is None and limit is None:
+        return await conversation_service.list_summaries(db, current_user)
+    eff_limit = limit or 30
+    eff_offset = (page - 1) * eff_limit if page else 0
+    return await conversation_service.list_summaries(
+        db, current_user, offset=eff_offset, limit=eff_limit
+    )
 
 
 @router.post("", response_model=ConversationDetail, status_code=201)
