@@ -109,6 +109,12 @@ async def push_to_user(
                 or "registration_token_not_registered" in err_lower
                 or "unregistered" in err_lower
                 or "not a valid fcm registration token" in err_lower
+                # variante Admin SDK observee en prod : "NOT_FOUND: NotRegistered"
+                # ("notregistered" colle, sans tiret ni underscore) — sans ce
+                # pattern, ces tokens ne sont jamais classes stale ni purges,
+                # et s'accumulent indefiniment (10 tokens/compte apres une
+                # semaine de tests, 9 morts a chaque envoi).
+                or "notregistered" in err_lower
             )
             # log SYSTÉMATIQUE de la raison exacte, même pour un token classé
             # stale -> indispensable pour diagnostiquer SI "invalid argument"
