@@ -6,6 +6,7 @@ import contextlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -18,6 +19,7 @@ from app.core.middleware import LocaleMiddleware, RequestIdMiddleware
 from app.db.redis import close_redis, init_redis
 from app.i18n import available_locales
 from app.services.ws_manager import manager
+from app.tasks.appointment_reminders import run_reminder_check
 
 configure_logging()
 log = get_logger(__name__)
@@ -43,6 +45,9 @@ async def _call_sweep_loop() -> None:
             log.warning("call.sweep_failed", error=str(e))
 
 
+_appointment_scheduler = AsyncIOScheduler()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("startup", env=settings.ENV, locales=available_locales())
@@ -50,10 +55,26 @@ async def lifespan(app: FastAPI):
     # Redis) — OTP, cooldown et presence continuent de fonctionner.
     await init_redis()
     sweep_task = asyncio.create_task(_call_sweep_loop())
+
+    # Rappels de rendez-vous (24h/1h/heure-pile) — job in-process, pas de cron
+    # systeme : deploye automatiquement avec l'appli. Chaque run ouvre sa
+    # propre session DB (voir `run_reminder_check`), jamais la dependance
+    # FastAPI request-scoped.
+    _appointment_scheduler.add_job(
+        run_reminder_check,
+        "interval",
+        seconds=60,
+        id="appointment_reminders",
+        max_instances=1,
+        coalesce=True,
+    )
+    _appointment_scheduler.start()
+
     yield
     sweep_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await sweep_task
+    _appointment_scheduler.shutdown()
     await manager.shutdown()
     await close_redis()
     log.info("shutdown")

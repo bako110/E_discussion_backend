@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1.routers import (
+    appointments,
     auth,
     calls,
     contacts,
@@ -28,4 +29,5 @@ api_router.include_router(groups.router, prefix="/groups", tags=["Groups & Chann
 api_router.include_router(media.router, prefix="/media", tags=["Media"])
 api_router.include_router(devices.router, prefix="/devices", tags=["Devices / E2E Keys"])
 api_router.include_router(calls.router, prefix="/calls", tags=["Calls (WebRTC)"])
+api_router.include_router(appointments.router, prefix="/appointments", tags=["Appointments"])
 api_router.include_router(ws.router, tags=["WebSocket"])

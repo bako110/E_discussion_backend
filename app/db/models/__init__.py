@@ -2,6 +2,14 @@
 donc chaque modele doit etre importe ici.
 """
 from app.db.base import Base
+from app.db.models.appointment import (
+    Appointment,
+    AppointmentParticipant,
+    AppointmentParticipantStatus,
+    AppointmentReminder,
+    AppointmentReminderKind,
+    AppointmentStatus,
+)
 from app.db.models.auth import OtpChallenge, RefreshToken
 from app.db.models.block import UserBlock
 from app.db.models.call import CallDirection, CallLog, CallStatus, CallType
@@ -77,4 +85,10 @@ __all__ = [
     "PinnedMessage",
     "ChannelDiscussion",
     "CallRating",
+    "Appointment",
+    "AppointmentStatus",
+    "AppointmentParticipant",
+    "AppointmentParticipantStatus",
+    "AppointmentReminder",
+    "AppointmentReminderKind",
 ]

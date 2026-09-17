@@ -33,6 +33,7 @@ livekit-api==0.8.2           # tokens LiveKit (appels — infra v2)
 python-slugify==8.0.4
 tenacity==9.0.0
 structlog==24.4.0
+apscheduler==3.10.4          # rappels de rendez-vous (in-process, pas de cron systeme)
 
 # ── Dev / tests ──────────────────────────────────────────────────────────────
 pytest==8.3.4
