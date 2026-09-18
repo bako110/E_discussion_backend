@@ -158,6 +158,7 @@ async def send(
         attachment_meta=data.attachment_meta,
         reply_to_id=data.reply_to_id,
         forwarded_from_id=data.forwarded_from_id,
+        forwarded_from_name=data.forwarded_from_name,
         client_id=data.client_id,
         # vue unique : ignore silencieusement pour un type non pris en charge
         # (texte/localisation) plutot que de rejeter l'envoi.

@@ -27,6 +27,7 @@ from app.schemas.group import (
     GroupMessageEditIn,
     GroupMessageOut,
     GroupMessageReactIn,
+    GroupMessageReactionOut,
     GroupOut,
     GroupPreview,
     GroupSettingsIn,
@@ -267,6 +268,20 @@ async def react_to_message(
     return await group_service.react_to_message(
         db, current_user, group_id, message_id, body.emoji
     )
+
+
+@router.get(
+    "/{group_id}/messages/{message_id}/reactions", response_model=list[GroupMessageReactionOut]
+)
+async def list_message_reactions(
+    group_id: uuid.UUID,
+    message_id: uuid.UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+):
+    """Liste plate {emoji, user} de qui a réagi — alimente la bottom sheet
+    ouverte au tap sur un compteur de réaction."""
+    return await group_service.list_message_reactions(db, current_user, group_id, message_id)
 
 
 @router.patch("/{group_id}/messages/{message_id}", response_model=GroupMessageOut)

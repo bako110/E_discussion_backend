@@ -33,6 +33,10 @@ class MessageOut(ORMModel):
     attachment_meta: dict | None
     reply_to: ReplyPreview | None = None
     forwarded_from_id: uuid.UUID | None
+    # nom de l'auteur ORIGINAL du message transféré (pas celui qui a cliqué
+    # "Transférer") — voir Message.forwarded_from_name. None si ce n'est
+    # pas un transfert.
+    forwarded_from_name: str | None = None
     # renseigne si le message est une reponse a une story
     story_id: uuid.UUID | None = None
     reaction: str | None = None            # reaction de l'utilisateur courant
@@ -58,6 +62,10 @@ class MessageCreate(BaseModel):
     attachment_meta: dict | None = None
     reply_to_id: uuid.UUID | None = None
     forwarded_from_id: uuid.UUID | None = None
+    # nom de l'auteur ORIGINAL du message transféré — fourni par le client
+    # au moment du transfert (l'origine peut être un message de groupe,
+    # jamais résolue côté serveur), voir Message.forwarded_from_name.
+    forwarded_from_name: str | None = Field(None, max_length=160)
     # Vue unique — uniquement pertinent pour type in {image, video, voice, file}.
     view_once: bool = False
     # Idempotence offline : si un message avec ce client_id existe deja dans

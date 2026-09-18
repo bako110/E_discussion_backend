@@ -188,9 +188,15 @@ class GroupMessage(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     client_id: Mapped[str | None] = mapped_column(String(64), index=True)
     # id du message d'origine si celui-ci est un TRANSFERT (façon WhatsApp) —
     # volontairement pas de ForeignKey : l'origine peut être un message 1-1
-    # OU un autre message de groupe, jamais affichée/résolue côté UI (juste
-    # un badge "Transféré"), donc pas besoin de contrainte référentielle.
+    # OU un autre message de groupe, jamais résolue côté serveur (juste un
+    # badge "Transféré"), donc pas besoin de contrainte référentielle.
     forwarded_from_id: Mapped[uuid.UUID | None] = mapped_column(GUID())
+    # nom de l'AUTEUR ORIGINAL (celui qui a écrit le message transféré, pas
+    # celui qui a cliqué "Transférer") — dénormalisé au moment du transfert
+    # plutôt que résolu via forwarded_from_id : l'origine peut être un
+    # message 1-1 OU un autre message de groupe (tables différentes, pas de
+    # FK), donc impossible à résoudre de façon fiable à l'affichage.
+    forwarded_from_name: Mapped[str | None] = mapped_column(String(160))
 
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

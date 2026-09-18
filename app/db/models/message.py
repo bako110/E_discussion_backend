@@ -92,6 +92,12 @@ class Message(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         GUID(),
         ForeignKey("messages.id", ondelete="SET NULL"),
     )
+    # nom de l'AUTEUR ORIGINAL du message transféré (pas celui qui a cliqué
+    # "Transférer") — dénormalisé au moment du transfert plutôt que résolu
+    # via forwarded_from_id : l'origine peut être un message de GROUPE (id
+    # absent de cette table, la FK ci-dessus ne le couvre pas), donc
+    # impossible à résoudre de façon fiable via une simple jointure.
+    forwarded_from_name: Mapped[str | None] = mapped_column(String(160))
 
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

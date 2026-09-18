@@ -197,6 +197,10 @@ class GroupMessageCreate(BaseModel):
     attachment_meta: dict | None = None
     client_id: str | None = Field(None, max_length=64)
     forwarded_from_id: uuid.UUID | None = None
+    # nom de l'auteur ORIGINAL du message transféré (pas celui qui transfère,
+    # deja visible comme sender du nouveau message) — fourni par le client
+    # au moment du transfert, voir Group.forwarded_from_name.
+    forwarded_from_name: str | None = Field(None, max_length=160)
 
 
 class GroupMessageEditIn(BaseModel):
@@ -220,6 +224,9 @@ class GroupMessageOut(ORMModel):
     attachment_url: str | None = None
     attachment_meta: dict | None = None
     forwarded_from_id: uuid.UUID | None = None
+    # nom de l'auteur ORIGINAL du message transféré — voir
+    # Group.forwarded_from_name. None si ce n'est pas un transfert.
+    forwarded_from_name: str | None = None
     edited_at: datetime | None = None
     deleted_at: datetime | None = None
     created_at: datetime
@@ -227,6 +234,13 @@ class GroupMessageOut(ORMModel):
     reactions: dict[str, int] = Field(default_factory=dict)
     # mon propre emoji sur ce message, ou None
     my_reaction: str | None = None
+
+
+class GroupMessageReactionOut(ORMModel):
+    """Une reaction individuelle — pour la bottom sheet "qui a reagi"."""
+
+    emoji: str
+    user: UserPublic
 
 
 class JoinIn(BaseModel):

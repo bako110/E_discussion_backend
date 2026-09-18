@@ -30,6 +30,7 @@ from app.schemas.group import (
     GroupMemberOut,
     GroupMessageCreate,
     GroupMessageOut,
+    GroupMessageReactionOut,
     GroupOut,
     GroupPreview,
     GroupUpdate,
@@ -889,6 +890,7 @@ async def send_message(
         attachment_meta=data.attachment_meta,
         client_id=data.client_id,
         forwarded_from_id=data.forwarded_from_id,
+        forwarded_from_name=data.forwarded_from_name,
     )
     db.add(msg)
     group.last_message_at = datetime.now(UTC)
@@ -1050,6 +1052,32 @@ async def react_to_message(
         },
     )
     return out
+
+
+async def list_message_reactions(
+    db: AsyncSession, me: User, group_id: uuid.UUID, message_id: uuid.UUID
+) -> list[GroupMessageReactionOut]:
+    """Liste PLATE (emoji + profil public) de qui a réagi sur ce message —
+    alimente la bottom sheet "vu par" ouverte au tap sur un compteur de
+    réaction (façon Instagram/Facebook). Triée par emoji puis date de
+    réaction, la plus récente en tête."""
+    await _require_member(db, group_id, me.id)
+    msg = await db.get(GroupMessage, message_id)
+    if msg is None or msg.group_id != group_id:
+        raise NotFoundError("group.message_not_found", code="message_not_found")
+
+    rows = (
+        await db.execute(
+            select(GroupMessageReaction, User)
+            .join(User, User.id == GroupMessageReaction.user_id)
+            .where(GroupMessageReaction.message_id == message_id)
+            .order_by(GroupMessageReaction.emoji, GroupMessageReaction.created_at.desc())
+        )
+    ).all()
+    return [
+        GroupMessageReactionOut(emoji=reaction.emoji, user=await user_service.serialize_public(u))
+        for reaction, u in rows
+    ]
 
 
 async def mark_read(db: AsyncSession, me: User, group_id: uuid.UUID) -> None:
