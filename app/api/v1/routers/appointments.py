@@ -12,7 +12,12 @@ import uuid
 from fastapi import APIRouter, Query, status
 
 from app.api.deps import CurrentUser, DbSession
-from app.schemas.appointment import AppointmentCreateIn, AppointmentOut
+from app.schemas.appointment import (
+    AppointmentCreateIn,
+    AppointmentNoteCreateIn,
+    AppointmentNoteOut,
+    AppointmentOut,
+)
 from app.schemas.common import Message
 from app.services import appointment_service
 
@@ -66,5 +71,58 @@ async def cancel_appointment(appointment_id: uuid.UUID, current_user: CurrentUse
 @router.delete("/{appointment_id}", response_model=Message)
 async def delete_appointment(appointment_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
     await appointment_service.delete_one(db, current_user, appointment_id)
+    await db.commit()
+    return Message(message="deleted")
+
+
+# ── masquage personnel ("hide for me") ───────────────────────────────────
+@router.post("/{appointment_id}/hide", response_model=Message)
+async def hide_appointment(appointment_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    """Retire ce rendez-vous de MA liste uniquement (organisateur et autres
+    participants inchanges, aucune notification declenchee)."""
+    await appointment_service.hide(db, current_user, appointment_id)
+    await db.commit()
+    return Message(message="hidden")
+
+
+@router.delete("/{appointment_id}/hide", response_model=Message)
+async def unhide_appointment(appointment_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    await appointment_service.unhide(db, current_user, appointment_id)
+    await db.commit()
+    return Message(message="unhidden")
+
+
+# ── notes ─────────────────────────────────────────────────────────────────
+@router.post(
+    "/{appointment_id}/notes",
+    response_model=AppointmentNoteOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_appointment_note(
+    appointment_id: uuid.UUID,
+    body: AppointmentNoteCreateIn,
+    current_user: CurrentUser,
+    db: DbSession,
+):
+    out = await appointment_service.create_note(db, current_user, appointment_id, body)
+    await db.commit()
+    return out
+
+
+@router.get("/{appointment_id}/notes", response_model=list[AppointmentNoteOut])
+async def list_appointment_notes(
+    appointment_id: uuid.UUID, current_user: CurrentUser, db: DbSession
+):
+    return await appointment_service.list_notes(db, current_user, appointment_id)
+
+
+@router.delete("/{appointment_id}/notes/{note_id}", response_model=Message)
+async def delete_appointment_note(
+    appointment_id: uuid.UUID,
+    note_id: uuid.UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+):
+    await appointment_service.delete_note(db, current_user, note_id)
     await db.commit()
     return Message(message="deleted")

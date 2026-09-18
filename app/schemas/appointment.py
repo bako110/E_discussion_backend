@@ -7,6 +7,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, model_validator
 
 from app.db.models.appointment import AppointmentParticipantStatus, AppointmentStatus
+from app.db.models.appointment_note import AppointmentNoteVisibility
 from app.schemas.common import ORMModel
 from app.schemas.user import UserPublic
 
@@ -59,3 +60,18 @@ class AppointmentOut(ORMModel):
 
 # valeurs acceptees par le filtre `status` de GET /appointments
 AppointmentListFilter = str  # "upcoming" | "past" | "ongoing" | "cancelled"
+
+
+class AppointmentNoteCreateIn(BaseModel):
+    body: str = Field(..., min_length=1, max_length=4000)
+    visibility: AppointmentNoteVisibility = AppointmentNoteVisibility.public
+
+
+class AppointmentNoteOut(ORMModel):
+    id: uuid.UUID
+    appointment_id: uuid.UUID
+    author: UserPublic
+    visibility: AppointmentNoteVisibility
+    body: str
+    created_at: datetime
+    updated_at: datetime

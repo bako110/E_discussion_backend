@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -27,8 +27,19 @@ from app.db.models.appointment import (
     AppointmentParticipantStatus,
     AppointmentStatus,
 )
+from app.db.models.appointment_note import (
+    AppointmentHiddenByUser,
+    AppointmentNote,
+    AppointmentNoteVisibility,
+)
 from app.db.models.user import User
-from app.schemas.appointment import AppointmentCreateIn, AppointmentOut, AppointmentParticipantOut
+from app.schemas.appointment import (
+    AppointmentCreateIn,
+    AppointmentNoteCreateIn,
+    AppointmentNoteOut,
+    AppointmentOut,
+    AppointmentParticipantOut,
+)
 from app.services import push_service, user_service
 from app.services.ws_manager import manager
 
@@ -213,6 +224,14 @@ def _matches_status_filter(appt: Appointment, status_filter: str | None, now: da
 async def list_for_user(
     db: AsyncSession, me: User, *, status_filter: str | None = None
 ) -> list[AppointmentOut]:
+    # « masques pour moi » (voir hide()) : exclus via anti-join contre
+    # `appointment_hidden_by_user`, uniquement pour MOI — l'organisateur et
+    # les autres participants ne sont jamais affectes par mon masquage.
+    hidden_ids_subq = (
+        select(AppointmentHiddenByUser.appointment_id)
+        .where(AppointmentHiddenByUser.user_id == me.id)
+        .scalar_subquery()
+    )
     rows = (
         await db.execute(
             select(Appointment)
@@ -223,7 +242,8 @@ async def list_for_user(
                 or_(
                     Appointment.organizer_id == me.id,
                     AppointmentParticipant.user_id == me.id,
-                )
+                ),
+                Appointment.id.not_in(hidden_ids_subq),
             )
             .options(selectinload(Appointment.participants))
             .order_by(Appointment.scheduled_at.asc())
@@ -375,3 +395,110 @@ async def delete_one(db: AsyncSession, me: User, appointment_id: uuid.UUID) -> N
     if appt.organizer_id != me.id:
         raise ForbiddenError()
     await db.delete(appt)
+
+
+# ── masquage personnel ("hide for me") ───────────────────────────────────
+# Retire un rendez-vous de MA liste uniquement — l'organisateur et les
+# autres participants ne voient jamais ce masquage (pas de push/WS, pas de
+# changement de Appointment.status/AppointmentParticipant.status). Mirroir
+# exact de conversation_service.hide/unhide (voir ConversationHide).
+async def hide(db: AsyncSession, me: User, appointment_id: uuid.UUID) -> None:
+    # meme verification d'acces que get_one/_load_authorized : 404 si ni
+    # organisateur ni participant (pas de fuite d'existence).
+    await _load_authorized(db, me, appointment_id)
+    res = await db.execute(
+        select(AppointmentHiddenByUser).where(
+            AppointmentHiddenByUser.user_id == me.id,
+            AppointmentHiddenByUser.appointment_id == appointment_id,
+        )
+    )
+    row = res.scalar_one_or_none()
+    now = _now()
+    if row is None:
+        db.add(
+            AppointmentHiddenByUser(user_id=me.id, appointment_id=appointment_id, hidden_at=now)
+        )
+    else:
+        row.hidden_at = now
+    await db.flush()
+
+
+async def unhide(db: AsyncSession, me: User, appointment_id: uuid.UUID) -> None:
+    res = await db.execute(
+        select(AppointmentHiddenByUser).where(
+            AppointmentHiddenByUser.user_id == me.id,
+            AppointmentHiddenByUser.appointment_id == appointment_id,
+        )
+    )
+    row = res.scalar_one_or_none()
+    if row is not None:
+        await db.delete(row)
+        await db.flush()
+
+
+# ── notes ──────────────────────────────────────────────────────────────
+async def _to_note_out(db: AsyncSession, me: User, note: AppointmentNote) -> AppointmentNoteOut:
+    author = await db.get(User, note.author_id)
+    return AppointmentNoteOut(
+        id=note.id,
+        appointment_id=note.appointment_id,
+        author=await user_service.serialize_public(author, viewer_id=me.id),
+        visibility=note.visibility,
+        body=note.body,
+        created_at=note.created_at,
+        updated_at=note.updated_at,
+    )
+
+
+async def create_note(
+    db: AsyncSession, me: User, appointment_id: uuid.UUID, body_in: AppointmentNoteCreateIn
+) -> AppointmentNoteOut:
+    # organisateur ou participant uniquement — meme verification que
+    # get_one (404 si aucun des deux, pas de fuite d'existence).
+    await _load_authorized(db, me, appointment_id)
+
+    note = AppointmentNote(
+        appointment_id=appointment_id,
+        author_id=me.id,
+        visibility=body_in.visibility,
+        body=body_in.body,
+    )
+    db.add(note)
+    await db.flush()
+    return await _to_note_out(db, me, note)
+
+
+async def list_notes(
+    db: AsyncSession, me: User, appointment_id: uuid.UUID
+) -> list[AppointmentNoteOut]:
+    await _load_authorized(db, me, appointment_id)
+
+    # visibles : toutes les notes publiques, + MES notes privees uniquement
+    # (jamais les notes privees de quelqu'un d'autre).
+    rows = (
+        await db.execute(
+            select(AppointmentNote)
+            .where(
+                AppointmentNote.appointment_id == appointment_id,
+                or_(
+                    AppointmentNote.visibility == AppointmentNoteVisibility.public,
+                    and_(
+                        AppointmentNote.visibility == AppointmentNoteVisibility.private,
+                        AppointmentNote.author_id == me.id,
+                    ),
+                ),
+            )
+            .order_by(AppointmentNote.created_at.asc())
+        )
+    ).scalars().all()
+    return [await _to_note_out(db, me, n) for n in rows]
+
+
+async def delete_note(db: AsyncSession, me: User, note_id: uuid.UUID) -> None:
+    note = await db.get(AppointmentNote, note_id)
+    if note is None:
+        raise NotFoundError("appointments.note_not_found", code="appointment_note_not_found")
+    if note.author_id != me.id:
+        raise ForbiddenError()
+    await db.delete(note)
+    await db.flush()

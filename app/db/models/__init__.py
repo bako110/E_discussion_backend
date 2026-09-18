@@ -10,6 +10,11 @@ from app.db.models.appointment import (
     AppointmentReminderKind,
     AppointmentStatus,
 )
+from app.db.models.appointment_note import (
+    AppointmentHiddenByUser,
+    AppointmentNote,
+    AppointmentNoteVisibility,
+)
 from app.db.models.auth import OtpChallenge, RefreshToken
 from app.db.models.block import UserBlock
 from app.db.models.call import CallDirection, CallLog, CallStatus, CallType
@@ -91,4 +96,7 @@ __all__ = [
     "AppointmentParticipantStatus",
     "AppointmentReminder",
     "AppointmentReminderKind",
+    "AppointmentNote",
+    "AppointmentNoteVisibility",
+    "AppointmentHiddenByUser",
 ]
