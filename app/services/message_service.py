@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy import and_, desc, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, ForbiddenError, NotFoundError
@@ -167,6 +167,21 @@ async def send(
     db.add(msg)
     conv.last_message_at = datetime.now(UTC)
     await db.flush()
+
+    # Compteur de partages sur le message D'ORIGINE — l'origine peut être un
+    # message 1-1 (`Message`, pas de colonne dédiée : jamais retransféré ce
+    # sens depuis un groupe) OU un message de GROUPE (`GroupMessage.
+    # forward_count`, le seul cas affiché dans l'UI pour l'instant). Aucune FK
+    # entre les deux tables -> on tente group_messages, silencieux si absent
+    # (l'origine était alors un message 1-1, ou a été supprimée depuis).
+    if data.forwarded_from_id:
+        from app.db.models.group import GroupMessage
+
+        await db.execute(
+            update(GroupMessage)
+            .where(GroupMessage.id == data.forwarded_from_id)
+            .values(forward_count=GroupMessage.forward_count + 1)
+        )
 
     payload = (await _serialize(db, msg, viewer_id=partner_id)).model_dump(mode="json")
     await manager.send_to_user(str(partner_id), {"type": "message.new", "message": payload})

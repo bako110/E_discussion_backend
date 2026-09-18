@@ -234,6 +234,8 @@ class GroupMessageOut(ORMModel):
     reactions: dict[str, int] = Field(default_factory=dict)
     # mon propre emoji sur ce message, ou None
     my_reaction: str | None = None
+    # nombre de fois que CE message a ete transfere ailleurs
+    forward_count: int = 0
 
 
 class GroupMessageReactionOut(ORMModel):

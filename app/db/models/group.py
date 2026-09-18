@@ -197,6 +197,13 @@ class GroupMessage(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # message 1-1 OU un autre message de groupe (tables différentes, pas de
     # FK), donc impossible à résoudre de façon fiable à l'affichage.
     forwarded_from_name: Mapped[str | None] = mapped_column(String(160))
+    # Nombre de fois que CE message a été transféré ailleurs — incrémenté par
+    # `message_service.send`/`group_service.send_message` quand un NOUVEAU
+    # message est créé avec `forwarded_from_id` pointant vers celui-ci (pas
+    # calculé à la volée : l'origine peut être référencée depuis la table
+    # `messages` OU `group_messages`, une requête agrégée devrait interroger
+    # les deux à chaque affichage).
+    forward_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
