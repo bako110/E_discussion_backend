@@ -20,6 +20,7 @@ from app.schemas.story import (
     StoryUpdate,
     StoryViewerOut,
 )
+from app.schemas.user import UserPublic
 from app.services import story_service
 
 router = APIRouter()
@@ -42,6 +43,26 @@ async def set_audience(body: StoryAudienceIn, current_user: CurrentUser, db: DbS
     return await story_service.set_audience(
         db, current_user, body.mode, body.contact_ids
     )
+
+
+@router.get("/muted-authors", response_model=list[UserPublic])
+async def get_muted_authors(current_user: CurrentUser, db: DbSession):
+    """« Statuts masqués » — auteurs dont je ne vois plus les statuts."""
+    return await story_service.list_muted_story_authors(db, current_user)
+
+
+@router.post("/authors/{author_id}/mute", response_model=Message)
+async def mute_author(author_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    """Masque les statuts de `author_id` — UNIDIRECTIONNEL, n'affecte que
+    mon propre feed (voir story_service.mute_story_author)."""
+    await story_service.mute_story_author(db, current_user, author_id)
+    return Message(message="muted")
+
+
+@router.delete("/authors/{author_id}/mute", response_model=Message)
+async def unmute_author(author_id: uuid.UUID, current_user: CurrentUser, db: DbSession):
+    await story_service.unmute_story_author(db, current_user, author_id)
+    return Message(message="unmuted")
 
 
 @router.get("/mine", response_model=list[StoryOut])

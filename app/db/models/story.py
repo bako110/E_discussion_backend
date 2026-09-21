@@ -138,3 +138,24 @@ class StoryAudienceEntry(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     target_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
     )
+
+
+class StoryViewerMute(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """« Masquer ses statuts » — UNIDIRECTIONNEL et sans rapport avec
+    `UserBlock` (qui coupe messages/appels dans LES DEUX SENS). Ici seul
+    `muter_id` ne voit plus les statuts de `muted_id` dans son feed ;
+    `muted_id` continue de voir les statuts de `muter_id` normalement (si
+    l'audience de ce dernier le permet) et rien d'autre n'est affecté
+    (messages, appels, présence). Réversible depuis les réglages."""
+
+    __tablename__ = "story_viewer_mutes"
+    __table_args__ = (
+        UniqueConstraint("muter_id", "muted_id", name="uq_story_viewer_mute"),
+    )
+
+    muter_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    muted_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )

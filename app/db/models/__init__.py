@@ -47,6 +47,7 @@ from app.db.models.story import (
     StoryAudienceMode,
     StoryReaction,
     StoryView,
+    StoryViewerMute,
 )
 from app.db.models.user import User
 
@@ -78,6 +79,7 @@ __all__ = [
     "StoryReaction",
     "StoryAudienceEntry",
     "StoryAudienceMode",
+    "StoryViewerMute",
     "Group",
     "GroupMember",
     "GroupMessage",

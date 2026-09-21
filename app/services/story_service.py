@@ -15,7 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ForbiddenError, NotFoundError
 from app.db.models.conversation import Conversation
 from app.db.models.message import Message, MessageType
-from app.db.models.story import Story, StoryAudienceEntry, StoryReaction, StoryView
+from app.db.models.story import (
+    Story,
+    StoryAudienceEntry,
+    StoryReaction,
+    StoryView,
+    StoryViewerMute,
+)
 from app.db.models.user import User
 from app.schemas.story import (
     StoryCreate,
@@ -26,6 +32,7 @@ from app.schemas.story import (
     StoryUpdate,
     StoryViewerOut,
 )
+from app.schemas.user import UserPublic
 from app.services import conversation_service, user_service
 from app.services.push_service import push_to_user
 from app.services.ws_manager import manager
@@ -87,7 +94,17 @@ async def _story_audience_ids(db: AsyncSession, author: User) -> set[uuid.UUID]:
 async def _can_view_stories(db: AsyncSession, author: User, viewer_id: uuid.UUID) -> bool:
     if author.id == viewer_id:
         return True
-    return viewer_id in await _story_audience_ids(db, author)
+    if viewer_id not in await _story_audience_ids(db, author):
+        return False
+    # « Masquer ses statuts » : préférence du VIEWER, indépendante de
+    # l'audience choisie par l'auteur — vérifiée en dernier (requête la
+    # moins chère, un seul id à chercher).
+    muted = await db.scalar(
+        select(StoryViewerMute.id).where(
+            StoryViewerMute.muter_id == viewer_id, StoryViewerMute.muted_id == author.id
+        )
+    )
+    return muted is None
 
 
 async def _serialize(
@@ -296,9 +313,25 @@ async def my_stories(db: AsyncSession, me: User) -> list[StoryOut]:
     return [await _serialize(db, s, me_id=me.id) for s in rows]
 
 
+async def _muted_story_author_ids(db: AsyncSession, viewer_id: uuid.UUID) -> set[uuid.UUID]:
+    """Auteurs dont `viewer_id` a choisi de ne plus voir les statuts
+    (« Masquer ses statuts ») — UNIDIRECTIONNEL, sans rapport avec
+    `UserBlock` : n'affecte que le feed de `viewer_id`, l'auteur masqué
+    continue de voir les statuts de `viewer_id` normalement."""
+    rows = (
+        await db.execute(
+            select(StoryViewerMute.muted_id).where(StoryViewerMute.muter_id == viewer_id)
+        )
+    ).scalars().all()
+    return set(rows)
+
+
 async def feed(db: AsyncSession, me: User) -> list[StoryFeedItem]:
     """Stories des contacts, groupees par auteur, plus recentes d'abord."""
     contact_ids = await _contact_ids(db, me.id)
+    if not contact_ids:
+        return []
+    contact_ids -= await _muted_story_author_ids(db, me.id)
     if not contact_ids:
         return []
 
@@ -397,6 +430,37 @@ async def set_audience(
         db.add(StoryAudienceEntry(owner_id=me.id, target_id=tid))
     await db.flush()
     return {"mode": mode, "contact_ids": [str(x) for x in wanted]}
+
+
+# ── « Masquer ses statuts » (préférence du VIEWER, unidirectionnel) ────────
+async def mute_story_author(db: AsyncSession, me: User, author_id: uuid.UUID) -> None:
+    if author_id == me.id:
+        raise ForbiddenError("story.cannot_mute_self", code="cannot_mute_self")
+    exists = await db.scalar(
+        select(StoryViewerMute.id).where(
+            StoryViewerMute.muter_id == me.id, StoryViewerMute.muted_id == author_id
+        )
+    )
+    if exists is None:
+        db.add(StoryViewerMute(muter_id=me.id, muted_id=author_id))
+        await db.flush()
+
+
+async def unmute_story_author(db: AsyncSession, me: User, author_id: uuid.UUID) -> None:
+    await db.execute(
+        StoryViewerMute.__table__.delete().where(
+            StoryViewerMute.muter_id == me.id, StoryViewerMute.muted_id == author_id
+        )
+    )
+
+
+async def list_muted_story_authors(db: AsyncSession, me: User) -> list[UserPublic]:
+    """Pour l'écran réglages « Statuts masqués » — liste réversible."""
+    ids = await _muted_story_author_ids(db, me.id)
+    if not ids:
+        return []
+    users = (await db.execute(select(User).where(User.id.in_(ids)))).scalars().all()
+    return [await user_service.serialize_public(u) for u in users]
 
 
 # ── vues ───────────────────────────────────────────────────────────────────
