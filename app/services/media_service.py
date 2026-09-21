@@ -31,10 +31,14 @@ _IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"}
 _VIDEO_EXT = {".mp4", ".mov", ".m4v", ".webm", ".3gp", ".mkv"}
 _AUDIO_EXT = {".m4a", ".mp3", ".aac", ".ogg", ".opus", ".wav", ".amr"}
 # documents joints a une conversation (aucun traitement, copie brute)
+# ".bin" + "application/octet-stream" : format des pieces jointes E2EE
+# (voir crypto/fileCrypto.ts cote client) — un blob chiffre opaque, jamais
+# une vraie image/video/audio identifiable, toujours traite comme "file"
+# (copie brute, jamais de tentative Image.open/ffmpeg qui echouerait).
 _FILE_EXT = {
     ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".rtf",
     ".csv", ".odt", ".ods", ".odp", ".zip", ".rar", ".7z", ".gz", ".tar",
-    ".epub",
+    ".epub", ".bin",
 }
 _FILE_CONTENT_TYPES = {
     "application/pdf",
@@ -55,6 +59,7 @@ _FILE_CONTENT_TYPES = {
     "application/gzip",
     "application/x-tar",
     "application/epub+zip",
+    "application/octet-stream",
     "text/plain",
     "text/csv",
     "text/rtf",
