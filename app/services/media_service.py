@@ -293,13 +293,29 @@ async def save_upload(file: UploadFile) -> MediaResult:
     # le traitement (Pillow / ffmpeg) est bloquant -> thread
     def _work() -> MediaResult:
         if category == "image":
-            img_name, thumb_name, w, h = _process_image(tmp_path, out_dir, stem)
-            return MediaResult(
-                url=_public_url(f"{rel_dir}/{img_name}"),
-                thumbnail_url=_public_url(f"{rel_dir}/{thumb_name}"),
-                media_type="image",
-                width=w, height=h, size=size,
-            )
+            # Une pièce jointe E2EE (voir crypto/fileCrypto.ts côté client)
+            # est un blob chiffré opaque qui garde le NOM/l'extension du
+            # fichier original (ex: "photo.jpg") pour rester discret sur le
+            # réseau — Pillow ne peut donc jamais l'ouvrir comme une vraie
+            # image. Avant ce garde-fou, `Image.open` levait et l'upload
+            # entier échouait en 500 : un envoi chiffré ne devait PAS être
+            # bloqué juste parce que le serveur ne peut plus rien y lire par
+            # design. On retombe sur le traitement "file" (copie brute, pas
+            # de miniature) plutôt que de planter.
+            try:
+                img_name, thumb_name, w, h = _process_image(tmp_path, out_dir, stem)
+                return MediaResult(
+                    url=_public_url(f"{rel_dir}/{img_name}"),
+                    thumbnail_url=_public_url(f"{rel_dir}/{thumb_name}"),
+                    media_type="image",
+                    width=w, height=h, size=size,
+                )
+            except Exception:
+                return MediaResult(
+                    url=_public_url(f"{rel_dir}/{stem}{ext}"),
+                    media_type="image",
+                    size=size,
+                )
 
         if category == "video":
             thumb_name = f"{stem}_thumb.jpg"
