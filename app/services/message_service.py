@@ -9,6 +9,7 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import and_, desc, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, ForbiddenError, NotFoundError
@@ -303,7 +304,14 @@ async def mark_read(db: AsyncSession, me: User, conversation_id: uuid.UUID) -> i
             if receipt.read_at is None:
                 receipt.read_at = now
         senders.add(msg.sender_id)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        # meme race que mark_delivered/mark_played : deux appels mark_read
+        # concurrents sur la meme conversation peuvent tous deux tenter de
+        # creer un receipt pour le meme message.
+        await db.rollback()
+        return len(rows)
 
     # Accuses de lecture : si le lecteur les a desactives, on marque lu en
     # local (compteur de non-lus) mais on NE previent PAS l'expediteur.
@@ -335,7 +343,16 @@ async def mark_delivered(db: AsyncSession, user_id: uuid.UUID, message_id: uuid.
             delivered_at=datetime.now(UTC),
         )
     )
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        # Deux POST .../delivered concurrents pour le meme message (retry
+        # reseau, double appel client) passent tous les deux le check
+        # d'existence ci-dessus avant que l'un des deux ait fini d'inserer —
+        # le second percute la contrainte unique. No-op : le receipt existe
+        # deja, exactement l'etat qu'on voulait atteindre.
+        await db.rollback()
+        return
     # notifie l'expediteur : double coche grise (message.new -> "remis").
     # On relaie AUSSI `client_id` : cote client la ligne locale peut encore
     # etre indexee par client_id si la confirmation du POST n'est pas passee.
@@ -381,7 +398,13 @@ async def mark_played(db: AsyncSession, me: User, message_id: uuid.UUID) -> None
         receipt.played_at = now
     else:
         return  # deja horodate
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        # meme race que mark_delivered : un autre appel concurrent a deja
+        # cree le receipt entre le SELECT et cet INSERT.
+        await db.rollback()
+        return
 
     if me.read_receipts:
         await manager.send_to_user(
