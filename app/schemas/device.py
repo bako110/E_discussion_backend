@@ -9,6 +9,9 @@ from app.schemas.common import ORMModel
 
 
 class OneTimePreKeyIn(BaseModel):
+    """Conservé pour compat JSON (le client n'en envoie plus, liste toujours
+    vide) — voir device_service pour le pourquoi de l'abandon des OTPK."""
+
     key_id: int
     public_key: str  # base64
 
@@ -23,11 +26,6 @@ class RegisterKeysIn(BaseModel):
     signed_prekey: str
     prekey_signature: str
     one_time_prekeys: list[OneTimePreKeyIn] = Field(default_factory=list)
-
-
-class AddPreKeysIn(BaseModel):
-    device_id: str
-    one_time_prekeys: list[OneTimePreKeyIn]
 
 
 class KeysCountOut(BaseModel):

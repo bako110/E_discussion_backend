@@ -8,7 +8,6 @@ from fastapi import APIRouter, Header, status
 from app.api.deps import CurrentUser, DbSession
 from app.schemas.common import Message
 from app.schemas.device import (
-    AddPreKeysIn,
     DeviceOut,
     KeysCountOut,
     PreKeyBundleOut,
@@ -24,12 +23,6 @@ router = APIRouter()
 async def register_keys(body: RegisterKeysIn, current_user: CurrentUser, db: DbSession):
     await device_service.register_keys(db, current_user.id, body)
     return Message(message="registered")
-
-
-@router.post("/keys/one-time-prekeys", response_model=Message)
-async def add_prekeys(body: AddPreKeysIn, current_user: CurrentUser, db: DbSession):
-    n = await device_service.add_prekeys(db, current_user.id, body)
-    return Message(message=f"{n} prekeys added")
 
 
 @router.get("/me/keys-count", response_model=list[KeysCountOut])
